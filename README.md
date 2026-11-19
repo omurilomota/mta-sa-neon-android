@@ -1,6 +1,7 @@
 # MTA SA ANDROID ( for San Andreas Online/MTA NEON )
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20My%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/samuk190)
 
 A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft Auto: San Andreas** (MTA:SA) powered by the MTA Neon architecture and Grand Theft Auto: San Andreas Mobile engine.
 
@@ -402,8 +403,10 @@ Detailed architectural and protocol references are preserved in the `docs/` dire
 Join our community to discuss development, report findings, test builds, and collaborate:
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20My%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/samuk190)
 
-👉 **Discord Server:** [https://discord.gg/DKrpU3e4pF](https://discord.gg/DKrpU3e4pF)
+👉 **Discord Server:** [https://discord.gg/DKrpU3e4pF](https://discord.gg/DKrpU3e4pF)  
+☕ **Support on Ko-fi:** [https://ko-fi.com/samuk190](https://ko-fi.com/samuk190)
 
 ---
 

@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Ko-fi Support Link & Badge (2026-11-19)
+
+- Documentation (`README.md`): Added official Ko-fi support badge and contribution link (`https://ko-fi.com/samuk190`) to the header and Community & Support section so contributors and community members can support ongoing development work.
+
 ### Fixed — Network Keepalive & Multi-Server Protocol Conformance (2026-11-19)
 
 - Network Keepalive (Solution 2): In `NeonJoinProtocol.cpp` (`JoinState::InGameNoticeSent`), added periodic keepalive `SendPureSync` every 1000ms while waiting for resource downloads. Prevents vanilla and standard MTA servers from dropping or timing out mobile clients during asset download and loading phases.
