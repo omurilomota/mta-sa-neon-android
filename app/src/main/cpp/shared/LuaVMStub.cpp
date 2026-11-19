@@ -13,6 +13,7 @@
 #include "LuaWeaponApi.h"
 #include "LuaCryptApi.h"
 #include "LuaResourceApi.h"
+#include "LuaAudioApi.h"
 #include "LuaMtaWindowApi.h"
 #include "LuaEventRegistry.h"
 #include "LuaKeyBindApi.h"
@@ -162,6 +163,7 @@ static void StopOwnedSounds(const std::string* owner = nullptr, uint16_t netId =
         const std::string text = std::to_string(id);
         ::WorldRPG::JniBridge::PostGameLine(12, text.c_str());
     }
+    AudioStopOwnedSounds(owner, netId, generation);
 }
 // The IME action button asked to leave the field. Holds the keyboard closed until the next tap.
 static bool g_imeDismissed = false;
@@ -594,13 +596,18 @@ static bool SoundAlive(uint32_t id) {
     return false;
 }
 
-bool SoundElementAlive(uint32_t id) { return SoundAlive(id); }
+bool SoundElementAlive(uint32_t id) { return AudioSoundAlive(id) || SoundAlive(id); }
 
 static void PumpEndedSounds() {
     std::vector<uint32_t> ended;
     {
         std::lock_guard<std::mutex> lock(g_soundEndMu);
         ended.swap(g_soundEnded);
+    }
+    {
+        std::vector<uint32_t> audioEnded;
+        AudioCollectEndedSounds(audioEnded);
+        ended.insert(ended.end(), audioEnded.begin(), audioEnded.end());
     }
     if (!g_dx.L) return;
     for (uint32_t id : ended) {
@@ -2423,6 +2430,7 @@ static void installDxBindings(lua_State* L) {
     lua_setglobal(L, "localPlayer");
     InstallExtraBindings(L);
     installWardrobeBindings(L);
+    InstallAudioLua(L);
     InstallCategoryLua(L);
     InstallCameraLua(L);
     InstallFieldLua(L);
@@ -3306,6 +3314,7 @@ bool ActiveVmPulseResources() {
 }
 void ActiveVmResetSession() {
     WorldRPG::Script::ResourceLoader::Reset();
+    WorldRPG::Script::AudioResetSession();
     WorldRPG::Script::MtaWindowResetSession();
     if (!g_active) return;
     // A new session starts from a clean VM: no handlers, timers or globals from the old one.
@@ -3381,12 +3390,14 @@ void ActiveVmFireTransferVisibility(bool visible) {
 void ActiveVmNoteSoundEnded(uint32_t id) {
     std::lock_guard<std::mutex> lock(g_soundEndMu);
     if (g_soundEnded.size() < 32) g_soundEnded.push_back(id);
+    AudioNoteSoundEnded(id);
 }
 
 void ActiveVmNoteSoundLength(uint32_t id, double seconds) {
     if (!std::isfinite(seconds) || seconds < 0) return;
     std::lock_guard<std::mutex> lock(g_soundMu);
     if (SoundSlot* slot = FindSound(id)) slot->length = seconds;
+    AudioNoteSoundLength(id, seconds);
 }
 
 void ActiveVmQueueScriptInput(const char* text, int backspaces, const char* key) {

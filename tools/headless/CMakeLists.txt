@@ -94,6 +94,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/gtasa/GameTasks.cpp"
     "${NATIVE_DIR}/gtasa/ProjectileEngine.cpp"
     "${NATIVE_DIR}/shared/LuaResourceApi.cpp"
+    "${NATIVE_DIR}/shared/LuaAudioApi.cpp"
     "${NATIVE_DIR}/shared/LuaMtaWindowApi.cpp"
     "${NATIVE_DIR}/shared/LuaEventRegistry.cpp"
     "${NATIVE_DIR}/shared/LuaKeyBindApi.cpp"

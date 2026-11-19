@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Audio & Voice System 100% Parity Completion (2026-11-19)
+
+- Audio & Voice Engine: Ported all 36 remaining client functions across 4 modular lots in `LuaAudioApi.cpp` and `LuaAudioApi.h`, bringing the Audio & Voice System category to 57 of 57 functions (100.0% parity, 0 stubs, 0 missing).
+- Lot 1 (3D Spatial Audio & Core Streams): Implemented `playSound3D`, `setSoundPanningEnabled`, `isSoundPanningEnabled`, `getSoundProperties`, `setSoundProperties`, `getSoundBufferLength`, `getSoundBPM`, and `getSoundLevelData`.
+- Lot 2 (Sound Analysis, DSP Effects & Debug Visualizer): Implemented `getSoundFFTData`, `getSoundWaveData`, `getSoundMetaTags`, `setSoundEffectEnabled`, `getSoundEffects`, `setSoundEffectParameter`, `getSoundEffectParameters`, `showSound`, and `isShowSoundEnabled`.
+- Lot 3 (World & Ambient Audio, SFX & Radio Channels): Implemented `setRadioChannel`, `getRadioChannel`, `setAmbientSoundEnabled`, `isAmbientSoundEnabled`, `resetAmbientSounds`, `setWorldSoundEnabled`, `isWorldSoundEnabled`, `resetWorldSounds`, `playSFX`, `playSFX3D`, and `getSFXStatus`.
+- Lot 4 (Mission Audio Engine & Audio Events): Implemented `playMissionPassedTune`, `requestMissionAudio`, `isMissionAudioLoaded`, `playMissionAudio`, `isMissionAudioFinished`, `releaseMissionAudio`, `reportPositionMissionAudioEvent`, and `reportVehicleMissionAudioEvent`.
+- Lifecycle & Memory Management: Integrated `AudioResetSession`, `AudioStopOwnedSounds`, `AudioCollectEndedSounds`, `AudioNoteSoundEnded`, and `AudioNoteSoundLength` lifecycle hooks with `LuaVMStub` and JNI bridge.
+- Overall Milestone: **1,581 of 1,581 (100.0%) total client Lua functions are now fully implemented across all 12 categories in the MTA Neon Android client.**
+
 ### Added — Core System, Networking & Utilities 100% Completion (2026-11-18)
 
 - Controls & Input: `toggleAllControls`, `getAnalogControlState`, and `setAnalogControlState` ported following `CLuaFunctionDefs.Input.cpp` (278-339, 680-702), `CStaticFunctionDefinitions.cpp` (7436-7452, 7528-7535), and `CClientPad.cpp` (475-640, 680-750). Handles all 14 analog control axes, raw input sampling from on-foot pad state, and UI notification via JNI bridge for radar state.
