@@ -15,6 +15,8 @@ extern "C" {
 #include "lauxlib.h"
 }
 
+#include <algorithm>
+#include <cstring>
 #include <string>
 
 namespace WorldRPG::Script {
@@ -216,6 +218,183 @@ int l_getResourceState(lua_State* L) {
     return 1;
 }
 
+// CLuaResourceDefs.cpp:68-144.
+// var... call ( resource theResource, string theFunction, [arguments...] )
+int l_call(lua_State* L) {
+    ResourceLoader::ResourceView view;
+    if (!ResourceAt(L, 1, false, view)) {
+        if (lua_isstring(L, 1)) {
+            const char* resName = lua_tostring(L, 1);
+            if (!ResourceLoader::CopyResource(resName ? resName : "", view)) {
+                PushFail(L);
+                return 1;
+            }
+        } else {
+            PushFail(L);
+            return 1;
+        }
+    }
+    if (!lua_isstring(L, 2)) {
+        PushFail(L);
+        return 1;
+    }
+    const char* funcName = lua_tostring(L, 2);
+    if (!funcName || funcName[0] == '\0') {
+        PushFail(L);
+        return 1;
+    }
+    lua_getglobal(L, "sourceResource");
+    const int oldSourceRes = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_getglobal(L, "sourceResourceRoot");
+    const int oldSourceRoot = luaL_ref(L, LUA_REGISTRYINDEX);
+
+    ResourceLoader::ResourceView caller;
+    if (ResourceLoader::CopyCallerResource(ActiveVmOwnerNet(), ActiveVmOwnerGeneration(), ActiveVmOwner(), caller)) {
+        PushResource(L, caller);
+        lua_setglobal(L, "sourceResource");
+        if (caller.root != 0) PushElement(L, caller.root);
+        else lua_pushnil(L);
+        lua_setglobal(L, "sourceResourceRoot");
+    }
+
+    bool foundFunc = false;
+    lua_getglobal(L, "exports");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, view.name.c_str());
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, funcName);
+            if (lua_isfunction(L, -1)) {
+                foundFunc = true;
+                lua_remove(L, -2);
+                lua_remove(L, -2);
+            } else {
+                lua_pop(L, 2);
+            }
+        } else {
+            lua_pop(L, 1);
+        }
+    }
+    if (!foundFunc) {
+        lua_pop(L, 1);
+        lua_getglobal(L, funcName);
+        if (lua_isfunction(L, -1)) {
+            foundFunc = true;
+        }
+    }
+    if (!foundFunc) {
+        lua_pop(L, 1);
+        lua_rawgeti(L, LUA_REGISTRYINDEX, oldSourceRes);
+        lua_setglobal(L, "sourceResource");
+        luaL_unref(L, LUA_REGISTRYINDEX, oldSourceRes);
+        lua_rawgeti(L, LUA_REGISTRYINDEX, oldSourceRoot);
+        lua_setglobal(L, "sourceResourceRoot");
+        luaL_unref(L, LUA_REGISTRYINDEX, oldSourceRoot);
+        PushFail(L);
+        return 1;
+    }
+
+    const int top = lua_gettop(L) - 1;
+    const int argCount = std::max(0, top - 2);
+    for (int i = 3; i <= top; ++i) {
+        lua_pushvalue(L, i);
+    }
+    const int oldTop = lua_gettop(L) - argCount - 1;
+    const int status = lua_pcall(L, argCount, LUA_MULTRET, 0);
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, oldSourceRes);
+    lua_setglobal(L, "sourceResource");
+    luaL_unref(L, LUA_REGISTRYINDEX, oldSourceRes);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, oldSourceRoot);
+    lua_setglobal(L, "sourceResourceRoot");
+    luaL_unref(L, LUA_REGISTRYINDEX, oldSourceRoot);
+
+    if (status != LUA_OK) {
+        const char* err = lua_tostring(L, -1);
+        LUA_LOGE("call: failed to call '%s:%s': %s", view.name.c_str(), funcName, err ? err : "unknown error");
+        lua_pop(L, 1);
+        PushFail(L);
+        return 1;
+    }
+    return lua_gettop(L) - oldTop;
+}
+
+// CLuaResourceDefs.cpp:470-548.
+// func, err load ( callbackFunction or string [, string name ] )
+int l_load(lua_State* L) {
+    std::string name = "=(load)";
+    if (lua_gettop(L) >= 2 && lua_isstring(L, 2)) {
+        name = lua_tostring(L, 2);
+    }
+    std::string code;
+    if (lua_isstring(L, 1)) {
+        size_t len = 0;
+        const char* s = lua_tolstring(L, 1, &len);
+        code.assign(s ? s : "", len);
+    } else if (lua_isfunction(L, 1)) {
+        while (true) {
+            lua_pushvalue(L, 1);
+            if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
+                lua_pushnil(L);
+                lua_insert(L, -2);
+                return 2;
+            }
+            if (lua_isnil(L, -1)) {
+                lua_pop(L, 1);
+                break;
+            }
+            if (lua_isstring(L, -1)) {
+                size_t partLen = 0;
+                const char* part = lua_tolstring(L, -1, &partLen);
+                if (partLen == 0) {
+                    lua_pop(L, 1);
+                    break;
+                }
+                code.append(part, partLen);
+                lua_pop(L, 1);
+                if (code.size() > 16 * 1024 * 1024) {
+                    lua_pushnil(L);
+                    lua_pushstring(L, "chunk too large");
+                    return 2;
+                }
+            } else {
+                lua_pop(L, 1);
+                break;
+            }
+        }
+    } else {
+        lua_pushnil(L);
+        lua_pushstring(L, "bad argument #1 to 'load' (function or string expected)");
+        return 2;
+    }
+    if (luaL_loadbuffer(L, code.data(), code.size(), name.c_str()) != LUA_OK) {
+        lua_pushnil(L);
+        lua_insert(L, -2);
+        return 2;
+    }
+    return 1;
+}
+
+// CLuaResourceDefs.cpp:167-224.
+// xmlnode getResourceConfig ( string filePath )
+int l_getResourceConfig(lua_State* L) {
+    if (!lua_isstring(L, 1)) {
+        PushFail(L);
+        return 1;
+    }
+    lua_getglobal(L, "xmlLoadFile");
+    if (lua_isfunction(L, -1)) {
+        lua_pushvalue(L, 1);
+        if (lua_pcall(L, 1, 1, 0) == LUA_OK) {
+            return 1;
+        }
+        lua_pop(L, 1);
+    } else {
+        lua_pop(L, 1);
+    }
+    PushFail(L);
+    return 1;
+}
+
 }  // namespace
 
 bool PushResourceInstance(lua_State* L, uint16_t netId, uint32_t generation) {
@@ -270,6 +449,12 @@ void InstallResourceLua(lua_State* L) {
     lua_setglobal(L, "getResources");
     lua_pushcfunction(L, l_getResourceState);
     lua_setglobal(L, "getResourceState");
+    lua_pushcfunction(L, l_call);
+    lua_setglobal(L, "call");
+    lua_pushcfunction(L, l_load);
+    lua_setglobal(L, "load");
+    lua_pushcfunction(L, l_getResourceConfig);
+    lua_setglobal(L, "getResourceConfig");
 }
 
 }  // namespace WorldRPG::Script

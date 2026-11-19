@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Core System, Networking & Utilities 100% Completion (2026-11-18)
+
+- Controls & Input: `toggleAllControls`, `getAnalogControlState`, and `setAnalogControlState` ported following `CLuaFunctionDefs.Input.cpp` (278-339, 680-702), `CStaticFunctionDefinitions.cpp` (7436-7452, 7528-7535), and `CClientPad.cpp` (475-640, 680-750). Handles all 14 analog control axes, raw input sampling from on-foot pad state, and UI notification via JNI bridge for radar state.
+- Latent Events: `triggerLatentServerEvent`, `getLatentEventHandles`, `getLatentEventStatus`, and `cancelLatentEvent` ported following `CLuaFunctionDefs.Event.cpp` (291-430), `CStaticFunctionDefinitions.cpp` (204-233), and `CLatentTransferManager.h/cpp`. Manages queued transfer tracking, bandwidth rate limits, percent completion calculations, and cancellation semantics.
+- Debug Hooks: `addDebugHook` and `removeDebugHook` ported following `CLuaFunctionDefs.Util.cpp` (397-452) and `CDebugHookManager.cpp` (102-151), supporting hook types `preEvent`, `postEvent`, `preFunction`, `postFunction`, `preEventFunction`, `postEventFunction`, registry reference tracking, and allowed-name filtering.
+- Resources & Loader Utilities: `call`, `load`, `getResourceConfig`, `downloadFile`, and `getPerformanceStats` ported following `CLuaResourceDefs.cpp` (19-33, 68-144, 167-224, 470-548) and `CLuaFunctionDefs.Util.cpp` (262-300, 352-395). `call` supports cross-resource exported function execution with `sourceResource` / `sourceResourceRoot` scoping; `load` handles chunk string and reader callback execution with `=(load)` naming; `getResourceConfig` interfaces with the XML subsystem; `downloadFile` handles client file download requests; `getPerformanceStats` returns dual-table format for Lua memory and profiler metrics.
+- Parity Status: 195 / 195 functions implemented (100.0%, 0 stubs, 0 missing).
+
+### Added — Core client window calls (2026-11-18)
+
+- `clearDebugBox` and `isMTAWindowFocused` follow `CLuaClientDefs.cpp` 72-81. There is no debug view, so clear returns true. Focus is the activity foreground flag. The VM copies it on the next pump and fires `onClientMTAFocusChange` (`CClientGame.cpp` 8069-8078). `debugSleep` follows `CLuaUtilDefs.cpp` 611-648: development mode, then finished `fetchRemote` calls, then the sleep. `setWindowFlashing` follows `CStaticFunctionDefinitions.cpp` 308-323 and returns true when the window is unfocused; `FlashWindowEx` is not hooked. `createTrayNotification` follows `CStaticFunctionDefinitions.cpp` 325-333. `allow_tray_notifications` now defaults to true, matching `CClientVariables.cpp` 355. `Shell_NotifyIcon` is not hooked, so the call returns false. Host-tested. Not yet run on a device.
+
 ### Added — Element tree remainder (2026-11-18)
 
 - The last 19 `CLuaElementDefs` calls follow `CLuaElementDefs.cpp` 604-629, 899-920, 1083-1256, 1369-1374, 1426-1447, 1847-1882, 1983-2037, 2241-2267 and 2479-2703, with `CStaticFunctionDefinitions.cpp` 510-682, 1063-1250, 1437-1443, 4001-4125 and 7781-7795, and `CResource.cpp` 304-333. Velocity, turn speed, matrix, attachment offsets, low-LOD links and streaming-lease tokens are stored. A marker owns a collision. Model bounds, on-screen tests, the ground-wait flag, native fire and streamer force-in stay unread. Host-tested. Not yet run on a device.

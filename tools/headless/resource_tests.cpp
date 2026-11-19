@@ -1851,6 +1851,51 @@ void CheckGui(WorldRPG::Script::LuaVMStub& vm) {
 }
 
 // Client window state calls (desktop CLuaGUIDefs.cpp:642-700, 3631-3748, 4066-4086).
+void CheckCoreClientCalls(WorldRPG::Script::LuaVMStub& vm) {
+    // CLuaClientDefs ClearDebug / IsMTAWindowFocused, CLuaUtilDefs::DebugSleep,
+    // CLuaFunctionDefs::SetWindowFlashing and CreateTrayNotification.
+    RunLua(vm, "core-client-unfocused", R"LUA(
+        assert(clearDebugBox() == true and clearDebugBox("extra") == true, "clear debug")
+        assert(isMTAWindowFocused() == false, "host window is not focused yet")
+        assert(isTrayNotificationEnabled() == true, "tray cvar default")
+        assert(setWindowFlashing() == false and setWindowFlashing(1) == false, "flash needs a bool")
+        assert(setWindowFlashing(true, -1) == false and setWindowFlashing(true, "no") == false, "flash count")
+        assert(setWindowFlashing(true, 0/0) == false, "flash nan")
+        assert(setWindowFlashing(true) == true and setWindowFlashing(false, 3) == true, "flash while unfocused")
+        assert(setWindowFlashing(true, "4", "extra") == true, "flash ignores a spare argument")
+        assert(createTrayNotification() == false and createTrayNotification("hi", "nope") == false, "tray arguments")
+        assert(createTrayNotification("hi", "default", "x") == false, "tray sound")
+        assert(createTrayNotification(12) == false and createTrayNotification("hi", "INFO", false) == false, "tray icon missing")
+        assert(setDevelopmentMode(false) == true and debugSleep(0) == false, "sleep needs dev mode")
+        assert(debugSleep() == false and debugSleep(true) == false and debugSleep("zz") == false, "sleep arguments")
+        assert(debugSleep(-1) == false and debugSleep(0/0) == false, "sleep range")
+        assert(setDevelopmentMode(true) == true and debugSleep(0) == true and debugSleep("0") == true, "sleep in dev mode")
+        focusHits = {}
+        assert(addEventHandler("onClientMTAFocusChange", root, function(state)
+            focusHits[#focusHits + 1] = state
+        end) == true, "focus handler")
+    )LUA");
+    WorldRPG::Script::MtaWindowSetFocused(true);
+    RunLua(vm, "core-client-focus-pending",
+           "assert(isMTAWindowFocused() == false and setWindowFlashing(true) == false, 'live focus blocks the flash')");
+    vm.pumpDx();
+    RunLua(vm, "core-client-focus-on",
+           "assert(isMTAWindowFocused() == true and #focusHits == 1 and focusHits[1] == true, 'focus gained')");
+    WorldRPG::Script::MtaWindowSetFocused(true);
+    vm.pumpDx();
+    RunLua(vm, "core-client-focus-same",
+           "assert(#focusHits == 1, 'same focus does not fire again')");
+    WorldRPG::Script::MtaWindowSetFocused(false);
+    vm.pumpDx();
+    RunLua(vm, "core-client-focus-off",
+           "assert(isMTAWindowFocused() == false and #focusHits == 2 and focusHits[2] == false, 'focus lost')");
+    WorldRPG::Script::MtaWindowSetFocused(true);
+    WorldRPG::Script::MtaWindowSetFocused(false);
+    vm.pumpDx();
+    RunLua(vm, "core-client-focus-coalesced",
+           "assert(#focusHits == 2 and setWindowFlashing(true) == true, 'cancelled focus change')");
+}
+
 void CheckMtaWindow(WorldRPG::Script::LuaVMStub& vm) {
     RunLua(vm, "mta-window-state", R"LUA(
         assert(isChatBoxInputActive() == false and isConsoleActive() == false, 'chat input and console closed')
@@ -4294,6 +4339,7 @@ int main(int argc, char** argv) {
     CheckDxTextLayout(vm);
     CheckMemoInput(vm);
     CheckMtaWindow(vm);
+    CheckCoreClientCalls(vm);
     CheckDxDrawing(vm);
     CheckSvg(vm);
     CheckStopLifecycle(vm);

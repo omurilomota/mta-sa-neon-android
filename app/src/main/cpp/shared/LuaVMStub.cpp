@@ -1420,6 +1420,163 @@ static int l_triggerServerEvent(lua_State* L) {
     return 1;
 }
 
+struct LatentTransferEntry {
+    uint32_t handle = 0;
+    std::chrono::steady_clock::time_point startTime{};
+    uint32_t bandwidth = 5000;
+    uint32_t totalSize = 0;
+    uint32_t estDurationMs = 0;
+    bool cancelled = false;
+};
+
+static std::mutex g_latentMutex;
+static uint32_t g_nextLatentHandle = 1;
+static std::vector<LatentTransferEntry> g_latentTransfers;
+
+// CLuaFunctionDefs.Event.cpp:291-338 and CStaticFunctionDefinitions.cpp:204-233.
+// triggerLatentServerEvent ( string event, [int bandwidth=5000,] [bool persist=false,] element theElement, [arguments...] )
+static int l_triggerLatentServerEvent(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TSTRING) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    size_t nameLength = 0;
+    const char* name = lua_tolstring(L, 1, &nameLength);
+    if (!name || nameLength == 0 || nameLength > 256) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    int argIdx = 2;
+    int bandwidth = 5000;
+    if (lua_type(L, argIdx) == LUA_TNUMBER) {
+        bandwidth = static_cast<int>(lua_tointeger(L, argIdx));
+        ++argIdx;
+    }
+    if (bandwidth < 500) bandwidth = 500;
+    bool persist = false;
+    if (lua_type(L, argIdx) == LUA_TBOOLEAN) {
+        persist = lua_toboolean(L, argIdx) != 0;
+        ++argIdx;
+    }
+    (void)persist;
+    uint32_t targetId = ElementIdOf(L, argIdx);
+    if (targetId == 0) targetId = ServerWorld::LastResourceRoot();
+    ++argIdx;
+
+    Net::BitStreamWriter packet;
+    packet.Write(static_cast<uint8_t>(81));
+    WriteCompressed(packet, static_cast<uint32_t>(nameLength), 2);
+    packet.WriteBytes(reinterpret_cast<const uint8_t*>(name), nameLength);
+    WriteBits(packet, targetId & 0x1FFFFu, 17);
+    const int top = lua_gettop(L);
+    const int args = std::max(0, top - argIdx + 1);
+    WriteCompressed(packet, static_cast<uint32_t>(args), 4);
+    for (int i = argIdx; i <= top; ++i) WriteLuaValue(L, i, packet, 0);
+
+    if (!WorldRPG::Debug::Flag("notrigger")) {
+        Net::SendGamePacket(packet, true);
+    }
+
+    const uint32_t totalSize = static_cast<uint32_t>(packet.GetByteLength() > 0 ? packet.GetByteLength() : 64);
+    uint32_t estDurationMs = static_cast<uint32_t>((static_cast<uint64_t>(totalSize) * 1000ULL) / static_cast<uint64_t>(bandwidth));
+    if (estDurationMs < 50) estDurationMs = 50;
+
+    {
+        std::lock_guard<std::mutex> lock(g_latentMutex);
+        LatentTransferEntry entry;
+        entry.handle = g_nextLatentHandle++;
+        entry.startTime = std::chrono::steady_clock::now();
+        entry.bandwidth = static_cast<uint32_t>(bandwidth);
+        entry.totalSize = totalSize;
+        entry.estDurationMs = estDurationMs;
+        entry.cancelled = false;
+        g_latentTransfers.push_back(entry);
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaFunctionDefs.Event.cpp:340-365.
+// table getLatentEventHandles ()
+static int l_getLatentEventHandles(lua_State* L) {
+    std::lock_guard<std::mutex> lock(g_latentMutex);
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<uint32_t> active;
+    for (auto it = g_latentTransfers.begin(); it != g_latentTransfers.end();) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->startTime).count();
+        if (it->cancelled || elapsed > static_cast<int64_t>(it->estDurationMs + 10000)) {
+            it = g_latentTransfers.erase(it);
+            continue;
+        }
+        if (elapsed <= static_cast<int64_t>(it->estDurationMs + 200)) {
+            active.push_back(it->handle);
+        }
+        ++it;
+    }
+    lua_createtable(L, static_cast<int>(active.size()), 0);
+    for (size_t i = 0; i < active.size(); ++i) {
+        lua_pushinteger(L, static_cast<lua_Integer>(active[i]));
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+}
+
+// CLuaFunctionDefs.Event.cpp:367-406.
+// table getLatentEventStatus ( int handle )
+static int l_getLatentEventStatus(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TNUMBER) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
+    std::lock_guard<std::mutex> lock(g_latentMutex);
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& tx : g_latentTransfers) {
+        if (tx.handle == handle && !tx.cancelled) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - tx.startTime).count();
+            if (elapsed > static_cast<int64_t>(tx.estDurationMs + 500)) {
+                lua_pushboolean(L, 0);
+                return 1;
+            }
+            double pct = tx.estDurationMs > 0 ? static_cast<double>(elapsed) / static_cast<double>(tx.estDurationMs) : 1.0;
+            if (pct < 0.0) pct = 0.0;
+            if (pct > 1.0) pct = 1.0;
+            lua_createtable(L, 0, 4);
+            lua_pushinteger(L, static_cast<lua_Integer>(-elapsed));
+            lua_setfield(L, -2, "tickStart");
+            lua_pushinteger(L, static_cast<lua_Integer>(std::max<int64_t>(0, static_cast<int64_t>(tx.estDurationMs) - elapsed)));
+            lua_setfield(L, -2, "tickEnd");
+            lua_pushinteger(L, static_cast<lua_Integer>(tx.totalSize));
+            lua_setfield(L, -2, "totalSize");
+            lua_pushnumber(L, pct);
+            lua_setfield(L, -2, "percentComplete");
+            return 1;
+        }
+    }
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
+// CLuaFunctionDefs.Event.cpp:408-430.
+// bool cancelLatentEvent ( int handle )
+static int l_cancelLatentEvent(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TNUMBER) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
+    std::lock_guard<std::mutex> lock(g_latentMutex);
+    for (auto& tx : g_latentTransfers) {
+        if (tx.handle == handle && !tx.cancelled) {
+            tx.cancelled = true;
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+    }
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
 static int l_setPedWander(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     int direction = static_cast<int>(luaL_optinteger(L, 3, 0));
@@ -2231,6 +2388,10 @@ static void installDxBindings(lua_State* L) {
         {"processLineOfSight", l_false},
         {"getPlayerMoney", l_getPlayerMoney},
         {"triggerServerEvent", l_triggerServerEvent},
+        {"triggerLatentServerEvent", l_triggerLatentServerEvent},
+        {"getLatentEventHandles", l_getLatentEventHandles},
+        {"getLatentEventStatus", l_getLatentEventStatus},
+        {"cancelLatentEvent", l_cancelLatentEvent},
         {"addEvent", l_addEvent},
         {"setPedWander", l_setPedWander},
         {"isElement", l_isElement},
@@ -2427,6 +2588,8 @@ bool LuaVMStub::initialize() {
 
     g_active = this;
     g_dx.L = pImpl_->L;
+    // CClientGame constructor: m_bFocused = g_pCore->IsFocused(), with no focus event.
+    MtaWindowAdoptFocus();
     GuiSetFocusHook(OnGuiFocusHook);
     pImpl_->initialized = true;
     pImpl_->log("INIT", "LuaVM initialized with real Lua 5.3.6 interpreter");
@@ -2569,6 +2732,7 @@ void LuaVMStub::reset() {
 
     // Re-register MTA functions
     pImpl_->registerAllFunctions();
+    MtaWindowAdoptFocus();
     GuiReset();
 
     pImpl_->loadedScripts.clear();
@@ -2754,6 +2918,16 @@ static void PumpCursorEvents() {
 
 std::string LuaVMStub::pumpDx() {
     if (!pImpl_->L) return {};
+    // CClientGame::OnWindowFocusChange (CClientGame.cpp:8069-8078). One report per pump.
+    bool windowFocused = false;
+    if (MtaWindowTakeFocusChange(windowFocused)) {
+        lua_getglobal(pImpl_->L, "source");
+        PushElement(pImpl_->L, ClientRootElement());
+        lua_setglobal(pImpl_->L, "source");
+        lua_pushboolean(pImpl_->L, windowFocused ? 1 : 0);
+        fireHandlers("onClientMTAFocusChange", 1, ClientRootElement());
+        lua_setglobal(pImpl_->L, "source");
+    }
     const auto now = DxNow();
     // Index loop: a timer callback may call setTimer, which reallocates g_dx.timers.
     for (size_t i = 0; i < g_dx.timers.size(); ++i) {

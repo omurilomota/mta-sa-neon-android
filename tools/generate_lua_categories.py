@@ -276,6 +276,12 @@ def guess_conversion_notes(name, group, status, detail):
         return "Stock IDE names, then vehicle display names for models 400..610 (CModelNames::InitializeMaps). Model 611 keeps no vehicle name. Lookup is case-insensitive. Server-model definitions are checked first and stay empty until engineRequestModel allocates them. A number passed to engineGetModelIDFromName is an empty string, matching lua_objlen. Host-tested; not device-verified."
     if status == "implemented" and name == "getValidPedModels":
         return "Stock models only (0..312 excluding 74, 149, 208); custom allocation is not ported. Host-tested; not device-verified. (GetValidPedModels)"
+    if status == "implemented" and name in {"clearDebugBox", "isMTAWindowFocused"}:
+        return "clearDebugBox follows CLuaClientDefs.cpp:72-76 and returns true. There is no CDebugView, so nothing is cleared. isMTAWindowFocused reads m_bFocused. The activity reports foreground focus; the VM copies it on the next pump and fires onClientMTAFocusChange. Host-tested. Not device-verified."
+    if status == "implemented" and name == "debugSleep":
+        return "Follows CLuaUtilDefs.cpp:611-648. A bad number returns false. Outside development mode it logs an error and returns false. In development mode it delivers finished fetchRemote calls, then sleeps. Host-tested."
+    if status == "implemented" and name in {"setWindowFlashing", "createTrayNotification", "isTrayNotificationEnabled"}:
+        return "setWindowFlashing follows CStaticFunctionDefinitions.cpp:308-323. A focused window or a disabled server_can_flash_window cvar returns false. FlashWindowEx is not hooked, so an allowed call returns true and does not flash. createTrayNotification follows CStaticFunctionDefinitions.cpp:325-333 and CTrayIcon.cpp:101-137. allow_tray_notifications defaults to true. Shell_NotifyIcon is not hooked, so the call returns false. Host-tested. Not device-verified."
     if status == "implemented" and name == "getBoundKeys":
         return "Queries command bindings across resources; no physical GTA-control keyboard mappings on mobile yet. Host-tested; not device-verified. (GetBoundKeys)"
     if status == "implemented" and name in {

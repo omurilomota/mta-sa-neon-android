@@ -9,6 +9,8 @@ namespace WorldRPG::Script {
 void InstallUtilLua(lua_State* L);
 // CClientGame::GetDevelopmentMode. showCol refuses to change while this is false.
 bool DevelopmentMode();
+// CClientVariables default allow_tray_notifications (CClientVariables.cpp:355).
+bool TrayNotificationsEnabled();
 
 // One client command handler to call (desktop CRegisteredCommands::ProcessCommand).
 struct CommandCall {

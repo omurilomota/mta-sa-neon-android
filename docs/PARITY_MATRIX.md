@@ -12,9 +12,9 @@ Percent = implemented / desktop total. Stub and missing columns are defined in t
 
 | Section | Desktop total | Implemented | Stub | Missing | % | Notes |
 |---|---|---|---|---|---|---|
-| A1 Lua functions | 1581 | 1397 | 3 | 181 | 88.4% | Port-only bindings not in desktop: 8. Duplicates across groups skipped: 0. |
+| A1 Lua functions | 1581 | 1545 | 1 | 35 | 97.7% | Port-only bindings not in desktop: 8. Duplicates across groups skipped: 0. |
 | A2 Lua OOP classes | 63 | 0 | 0 | 63 | 0.0% | Matched by global name only. Port class-registration calls found: 0. |
-| B Client events | 144 | 18 | 0 | 126 | 12.5% | Port fires 18 literal event names in total (onClientColShapeHit, onClientColShapeLeave, onClientElementColShapeHit, onClientElementColShapeLeave, onClientKey, onClientCharacter, onClientConsole, onClientSoundStopped, onClientResourceStart, onClientChatMessage, onClientCursorMove, onClientClick, onClientPreRender, onClientRender, onClientBirdShot, onClientResourceStop, onClientTransferBoxProgressChange, onClientTransferBoxVisibilityChange). Server-triggered names from packet 81 are dispatched dynamically and are not counted. |
+| B Client events | 144 | 19 | 0 | 125 | 13.2% | Port fires 19 literal event names in total (onClientColShapeHit, onClientColShapeLeave, onClientElementColShapeHit, onClientElementColShapeLeave, onClientKey, onClientCharacter, onClientConsole, onClientSoundStopped, onClientResourceStart, onClientChatMessage, onClientCursorMove, onClientClick, onClientMTAFocusChange, onClientPreRender, onClientRender, onClientBirdShot, onClientResourceStop, onClientTransferBoxProgressChange, onClientTransferBoxVisibilityChange). Server-triggered names from packet 81 are dispatched dynamically and are not counted. |
 | C1 Inbound packets (UPE game ids) | 62 | 24 | 0 | 38 | 38.7% | 1 desktop ids reachable only via provisional registerHandler (ids 0-11, not wire ids) counted as missing. Port explicitly dispatches 25 ids. |
 | C2 Outbound packets (client sends) | 31 | 10 | 0 | 21 | 32.3% | Port sends 10 game ids in total, of which 0 have no desktop SendPacket site. |
 | D Element types (ENTITY_ADD) | 17 | 13 | 1 | 3 | 76.5% | Desktop enum has 25 entries; 8 not in the desktop ENTITY_ADD switch. Desktop default branch present: yes. |
@@ -30,9 +30,9 @@ Desktop scope: the load graph from `CLuaManager::LoadCFunctions` (52 loader func
 | C function | Constant body | Defined at |
 |---|---|---|
 | FailBool | lua_pushboolean(L, 0) | shared/LuaAmbientApi.cpp:211 |
-| TrueResult | lua_pushboolean(L, 1) | shared/LuaApiExtra.cpp:278 |
-| FalseResult | lua_pushboolean(L, 0) | shared/LuaApiExtra.cpp:286 |
-| FileOpen | lua_pushnil(L) | shared/LuaApiExtra.cpp:292 |
+| TrueResult | lua_pushboolean(L, 1) | shared/LuaApiExtra.cpp:466 |
+| FalseResult | lua_pushboolean(L, 0) | shared/LuaApiExtra.cpp:474 |
+| FileOpen | lua_pushnil(L) | shared/LuaApiExtra.cpp:480 |
 | Fail | lua_pushboolean(L, 0) | shared/LuaWorldQueryApi.cpp:61 |
 | False | lua_pushboolean(L, 0) | shared/LuaBrowserApi.cpp:22 |
 | PushFalse | lua_pushboolean(L, 0) | shared/LuaWeaponApi.cpp:518 |
@@ -51,9 +51,9 @@ Plus the `DefaultValue` dispatcher (`LuaApiExtra.cpp`), which returns the kind i
 
 | Desktop group | Total | Implemented | Stub | Missing | % |
 |---|---|---|---|---|---|
-| CLuaManager (LoadCFunctions table) | 62 | 49 | 0 | 13 | 79.0% |
+| CLuaManager (LoadCFunctions table) | 62 | 62 | 0 | 0 | 100.0% |
 | CLuaAudioDefs | 57 | 21 | 1 | 35 | 36.8% |
-| CLuaBlipDefs | 12 | 0 | 1 | 11 | 0.0% |
+| CLuaBlipDefs | 12 | 12 | 0 | 0 | 100.0% |
 | CLuaBrowserDefs | 34 | 34 | 0 | 0 | 100.0% |
 | CLuaCameraDefs | 47 | 47 | 0 | 0 | 100.0% |
 | CLuaColShapeDefs | 21 | 21 | 0 | 0 | 100.0% |
@@ -64,21 +64,21 @@ Plus the `DefaultValue` dispatcher (`LuaApiExtra.cpp`), which returns the kind i
 | CLuaEngineDefs | 107 | 107 | 0 | 0 | 100.0% |
 | CLua2DFXDefs | 13 | 13 | 0 | 0 | 100.0% |
 | CLuaFireDefs | 20 | 20 | 0 | 0 | 100.0% |
-| CLuaRopeDefs | 28 | 0 | 0 | 28 | 0.0% |
-| CLuaNativeUIDefs | 7 | 0 | 0 | 7 | 0.0% |
+| CLuaRopeDefs | 28 | 28 | 0 | 0 | 100.0% |
+| CLuaNativeUIDefs | 7 | 7 | 0 | 0 | 100.0% |
 | CLuaGUIDefs | 137 | 137 | 0 | 0 | 100.0% |
-| CLuaMarkerDefs | 18 | 0 | 1 | 17 | 0.0% |
+| CLuaMarkerDefs | 18 | 18 | 0 | 0 | 100.0% |
 | CLuaNetworkDefs | 5 | 5 | 0 | 0 | 100.0% |
 | CLuaObjectDefs | 25 | 25 | 0 | 0 | 100.0% |
 | CLuaPedDefs | 167 | 167 | 0 | 0 | 100.0% |
-| CLuaPickupDefs | 6 | 0 | 0 | 6 | 0.0% |
+| CLuaPickupDefs | 6 | 6 | 0 | 0 | 100.0% |
 | CLuaPlayerDefs | 39 | 39 | 0 | 0 | 100.0% |
 | CLuaProjectileDefs | 7 | 7 | 0 | 0 | 100.0% |
-| CLuaPointLightDefs | 8 | 0 | 0 | 8 | 0.0% |
-| CLuaRadarAreaDefs | 8 | 0 | 0 | 8 | 0.0% |
-| CLuaResourceDefs | 13 | 10 | 0 | 3 | 76.9% |
-| CLuaSearchLightDefs | 11 | 0 | 0 | 11 | 0.0% |
-| CLuaTeamDefs | 6 | 0 | 0 | 6 | 0.0% |
+| CLuaPointLightDefs | 8 | 8 | 0 | 0 | 100.0% |
+| CLuaRadarAreaDefs | 8 | 8 | 0 | 0 | 100.0% |
+| CLuaResourceDefs | 13 | 13 | 0 | 0 | 100.0% |
+| CLuaSearchLightDefs | 11 | 11 | 0 | 0 | 100.0% |
+| CLuaTeamDefs | 6 | 6 | 0 | 0 | 100.0% |
 | CLuaTimerDefs | 8 | 8 | 0 | 0 | 100.0% |
 | CLuaVectorGraphicDefs | 6 | 6 | 0 | 0 | 100.0% |
 | CLuaVehicleDefs | 165 | 165 | 0 | 0 | 100.0% |
@@ -86,18 +86,18 @@ Plus the `DefaultValue` dispatcher (`LuaApiExtra.cpp`), which returns the kind i
 | CLuaWeaponDefs | 24 | 24 | 0 | 0 | 100.0% |
 | CLuaWorldDefs | 140 | 140 | 0 | 0 | 100.0% |
 | CLuaXMLDefs | 18 | 18 | 0 | 0 | 100.0% |
-| CLuaClientDefs | 12 | 10 | 0 | 2 | 83.3% |
+| CLuaClientDefs | 12 | 12 | 0 | 0 | 100.0% |
 | CLuaDiscordDefs | 12 | 12 | 0 | 0 | 100.0% |
 | CLuaBuildingDefs | 3 | 3 | 0 | 0 | 100.0% |
 | CLuaPostfxDefs | 3 | 3 | 0 | 0 | 100.0% |
 | CLuaFoliageDefs | 7 | 7 | 0 | 0 | 100.0% |
-| CLuaBirdDefs | 20 | 0 | 0 | 20 | 0.0% |
+| CLuaBirdDefs | 20 | 20 | 0 | 0 | 100.0% |
 | CLuaBitDefs | 12 | 12 | 0 | 0 | 100.0% |
-| CLuaCryptDefs | 12 | 7 | 0 | 5 | 58.3% |
+| CLuaCryptDefs | 12 | 12 | 0 | 0 | 100.0% |
 | CLuaFileDefs | 17 | 17 | 0 | 0 | 100.0% |
 | CLuaPathDefs | 3 | 3 | 0 | 0 | 100.0% |
 | CLuaUTFDefs | 5 | 5 | 0 | 0 | 100.0% |
-| CLuaUtilDefs | 22 | 21 | 0 | 1 | 95.5% |
+| CLuaUtilDefs | 22 | 22 | 0 | 0 | 100.0% |
 | CLuaBreakEffectDefs | 15 | 15 | 0 | 0 | 100.0% |
 | CLuaMain (lua_register) | 6 | 6 | 0 | 0 | 100.0% |
 
@@ -105,9 +105,7 @@ Plus the `DefaultValue` dispatcher (`LuaApiExtra.cpp`), which returns the kind i
 
 #### CLuaManager (LoadCFunctions table)
 
-Implemented (49): `addEvent`, `addEventHandler`, `removeEventHandler`, `getEventHandlers`, `triggerEvent`, `triggerServerEvent`, `cancelEvent`, `wasEventCancelled`, `outputConsole`, `outputChatBox`, `outputDebugString`, `setClipboard`, `clearChatBox`, `isTrayNotificationEnabled`, `getBodyPartName`, `getClothesByTypeIndex`, `getTypeIndexFromClothes`, `getClothesTypeName`, `addClothingModel`, `removeClothingModel`, `getCursorPosition`, `setCursorPosition`, `isCursorShowing`, `showCursor`, `getCursorAlpha`, `setCursorAlpha`, `getValidPedModels`, `bindKey`, `unbindKey`, `getKeyState`, `isControlEnabled`, `getBoundKeys`, `getFunctionsBoundToKey`, `getKeyBoundToFunction`, `getCommandsBoundToKey`, `getKeyBoundToCommand`, `toggleControl`, `addCommandHandler`, `removeCommandHandler`, `executeCommandHandler`, `getCommandHandlers`, `getNetworkUsageData`, `getNetworkStats`, `setDevelopmentMode`, `getDevelopmentMode`, `getVersion`, `getLocalization`, `getKeyboardLayout`, `isVoiceEnabled`
-
-Missing (13): `triggerLatentServerEvent`, `getLatentEventHandles`, `getLatentEventStatus`, `cancelLatentEvent`, `setWindowFlashing`, `createTrayNotification`, `downloadFile`, `getAnalogControlState`, `setAnalogControlState`, `toggleAllControls`, `getPerformanceStats`, `addDebugHook`, `removeDebugHook`
+Implemented (62): `addEvent`, `addEventHandler`, `removeEventHandler`, `getEventHandlers`, `triggerEvent`, `triggerServerEvent`, `cancelEvent`, `wasEventCancelled`, `triggerLatentServerEvent`, `getLatentEventHandles`, `getLatentEventStatus`, `cancelLatentEvent`, `outputConsole`, `outputChatBox`, `outputDebugString`, `setClipboard`, `setWindowFlashing`, `clearChatBox`, `createTrayNotification`, `isTrayNotificationEnabled`, `getBodyPartName`, `getClothesByTypeIndex`, `getTypeIndexFromClothes`, `getClothesTypeName`, `addClothingModel`, `removeClothingModel`, `getCursorPosition`, `setCursorPosition`, `isCursorShowing`, `showCursor`, `getCursorAlpha`, `setCursorAlpha`, `getValidPedModels`, `downloadFile`, `bindKey`, `unbindKey`, `getKeyState`, `getAnalogControlState`, `setAnalogControlState`, `isControlEnabled`, `getBoundKeys`, `getFunctionsBoundToKey`, `getKeyBoundToFunction`, `getCommandsBoundToKey`, `getKeyBoundToCommand`, `toggleControl`, `toggleAllControls`, `addCommandHandler`, `removeCommandHandler`, `executeCommandHandler`, `getCommandHandlers`, `getNetworkUsageData`, `getNetworkStats`, `getPerformanceStats`, `setDevelopmentMode`, `getDevelopmentMode`, `addDebugHook`, `removeDebugHook`, `getVersion`, `getLocalization`, `getKeyboardLayout`, `isVoiceEnabled`
 
 #### CLuaAudioDefs
 
@@ -117,19 +115,13 @@ Stub (1):
 
 | Lua function | Port binding | Where |
 |---|---|---|
-| playSound3D | DefaultValue(kFalse) | shared/LuaApiExtra.cpp:668 |
+| playSound3D | DefaultValue(kFalse) | shared/LuaApiExtra.cpp:859 |
 
 Missing (35): `playMissionPassedTune`, `setAmbientSoundEnabled`, `isAmbientSoundEnabled`, `resetAmbientSounds`, `setWorldSoundEnabled`, `isWorldSoundEnabled`, `resetWorldSounds`, `playSFX`, `playSFX3D`, `getSFXStatus`, `requestMissionAudio`, `isMissionAudioLoaded`, `playMissionAudio`, `isMissionAudioFinished`, `releaseMissionAudio`, `reportPositionMissionAudioEvent`, `reportVehicleMissionAudioEvent`, `getSoundBufferLength`, `setSoundProperties`, `getSoundProperties`, `getSoundFFTData`, `getSoundWaveData`, `getSoundLevelData`, `getSoundBPM`, `setSoundPanningEnabled`, `isSoundPanningEnabled`, `getSoundMetaTags`, `setSoundEffectEnabled`, `getSoundEffects`, `setSoundEffectParameter`, `getSoundEffectParameters`, `setRadioChannel`, `getRadioChannel`, `showSound`, `isShowSoundEnabled`
 
 #### CLuaBlipDefs
 
-Stub (1):
-
-| Lua function | Port binding | Where |
-|---|---|---|
-| createBlip | FalseResult: lua_pushboolean(L, 0) | shared/LuaApiExtra.cpp:623 |
-
-Missing (11): `createBlipAttachedTo`, `getBlipIcon`, `getBlipSize`, `getBlipColor`, `getBlipOrdering`, `getBlipVisibleDistance`, `setBlipIcon`, `setBlipSize`, `setBlipColor`, `setBlipOrdering`, `setBlipVisibleDistance`
+Implemented (12): `createBlip`, `createBlipAttachedTo`, `getBlipIcon`, `getBlipSize`, `getBlipColor`, `getBlipOrdering`, `getBlipVisibleDistance`, `setBlipIcon`, `setBlipSize`, `setBlipColor`, `setBlipOrdering`, `setBlipVisibleDistance`
 
 #### CLuaBrowserDefs
 
@@ -173,11 +165,11 @@ Implemented (20): `createFire`, `extinguishFire`, `getFireDuration`, `setFireDur
 
 #### CLuaRopeDefs
 
-Missing (28): `createRope`, `getRopeType`, `setRopeType`, `getRopeDuration`, `setRopeDuration`, `getRopeRemainingTime`, `setRopeRemainingTime`, `getRopeHolder`, `setRopeHolder`, `getRopeHolderOffset`, `setRopeHolderOffset`, `getRopeTopVelocity`, `setRopeTopVelocity`, `getRopeWinchHeight`, `setRopeWinchHeight`, `getRopeLength`, `setRopeLength`, `getRopeFixedNode`, `setRopeFixedNode`, `isRopeOnGround`, `setRopeOnGround`, `isRopePhysicsEnabled`, `setRopePhysicsEnabled`, `getRopeCarriedElement`, `attachElementToRope`, `detachElementFromRope`, `getRopePositionAt`, `isRopeActive`
+Implemented (28): `createRope`, `getRopeType`, `setRopeType`, `getRopeDuration`, `setRopeDuration`, `getRopeRemainingTime`, `setRopeRemainingTime`, `getRopeHolder`, `setRopeHolder`, `getRopeHolderOffset`, `setRopeHolderOffset`, `getRopeTopVelocity`, `setRopeTopVelocity`, `getRopeWinchHeight`, `setRopeWinchHeight`, `getRopeLength`, `setRopeLength`, `getRopeFixedNode`, `setRopeFixedNode`, `isRopeOnGround`, `setRopeOnGround`, `isRopePhysicsEnabled`, `setRopePhysicsEnabled`, `getRopeCarriedElement`, `attachElementToRope`, `detachElementFromRope`, `getRopePositionAt`, `isRopeActive`
 
 #### CLuaNativeUIDefs
 
-Missing (7): `createNativeUI`, `updateNativeUI`, `destroyNativeUI`, `getNativeUIState`, `releaseNativeUI`, `showNativeText`, `clearNativeText`
+Implemented (7): `createNativeUI`, `updateNativeUI`, `destroyNativeUI`, `getNativeUIState`, `releaseNativeUI`, `showNativeText`, `clearNativeText`
 
 #### CLuaGUIDefs
 
@@ -185,13 +177,7 @@ Implemented (137): `guiGetInputEnabled`, `guiSetInputEnabled`, `guiGetInputMode`
 
 #### CLuaMarkerDefs
 
-Stub (1):
-
-| Lua function | Port binding | Where |
-|---|---|---|
-| createMarker | FalseResult: lua_pushboolean(L, 0) | shared/LuaApiExtra.cpp:620 |
-
-Missing (17): `renderScriptImportantArea`, `getMarkerCount`, `getMarkerLimitStats`, `getMarkerType`, `getMarkerSize`, `getMarkerColor`, `getMarkerTarget`, `getMarkerIcon`, `getMarkerTargetArrowProperties`, `setMarkerType`, `setMarkerSize`, `setMarkerColor`, `setMarkerTarget`, `setMarkerIcon`, `setMarkerTargetArrowProperties`, `setCoronaReflectionEnabled`, `isCoronaReflectionEnabled`
+Implemented (18): `createMarker`, `renderScriptImportantArea`, `getMarkerCount`, `getMarkerLimitStats`, `getMarkerType`, `getMarkerSize`, `getMarkerColor`, `getMarkerTarget`, `getMarkerIcon`, `getMarkerTargetArrowProperties`, `setMarkerType`, `setMarkerSize`, `setMarkerColor`, `setMarkerTarget`, `setMarkerIcon`, `setMarkerTargetArrowProperties`, `setCoronaReflectionEnabled`, `isCoronaReflectionEnabled`
 
 #### CLuaNetworkDefs
 
@@ -207,7 +193,7 @@ Implemented (167): `createPed`, `detonateSatchels`, `killPed`, `resetPedVoice`, 
 
 #### CLuaPickupDefs
 
-Missing (6): `createPickup`, `getPickupType`, `getPickupWeapon`, `getPickupAmount`, `getPickupAmmo`, `setPickupType`
+Implemented (6): `createPickup`, `getPickupType`, `getPickupWeapon`, `getPickupAmount`, `getPickupAmmo`, `setPickupType`
 
 #### CLuaPlayerDefs
 
@@ -219,25 +205,23 @@ Implemented (7): `createProjectile`, `getProjectileType`, `getProjectileTarget`,
 
 #### CLuaPointLightDefs
 
-Missing (8): `createLight`, `getLightType`, `getLightRadius`, `setLightRadius`, `getLightColor`, `setLightColor`, `getLightDirection`, `setLightDirection`
+Implemented (8): `createLight`, `getLightType`, `getLightRadius`, `setLightRadius`, `getLightColor`, `setLightColor`, `getLightDirection`, `setLightDirection`
 
 #### CLuaRadarAreaDefs
 
-Missing (8): `createRadarArea`, `getRadarAreaColor`, `getRadarAreaSize`, `isRadarAreaFlashing`, `setRadarAreaColor`, `setRadarAreaFlashing`, `setRadarAreaSize`, `isInsideRadarArea`
+Implemented (8): `createRadarArea`, `getRadarAreaColor`, `getRadarAreaSize`, `isRadarAreaFlashing`, `setRadarAreaColor`, `setRadarAreaFlashing`, `setRadarAreaSize`, `isInsideRadarArea`
 
 #### CLuaResourceDefs
 
-Implemented (10): `getThisResource`, `getResourceName`, `getResourceFromName`, `getResourceRootElement`, `getResourceGUIElement`, `getResourceDynamicElementRoot`, `getResourceExportedFunctions`, `getResources`, `getResourceState`, `loadstring`
-
-Missing (3): `call`, `getResourceConfig`, `load`
+Implemented (13): `call`, `getThisResource`, `getResourceConfig`, `getResourceName`, `getResourceFromName`, `getResourceRootElement`, `getResourceGUIElement`, `getResourceDynamicElementRoot`, `getResourceExportedFunctions`, `getResources`, `getResourceState`, `loadstring`, `load`
 
 #### CLuaSearchLightDefs
 
-Missing (11): `createSearchLight`, `getSearchLightStartPosition`, `getSearchLightEndPosition`, `getSearchLightStartRadius`, `getSearchLightEndRadius`, `getSearchLightColor`, `setSearchLightStartPosition`, `setSearchLightEndPosition`, `setSearchLightStartRadius`, `setSearchLightEndRadius`, `setSearchLightColor`
+Implemented (11): `createSearchLight`, `getSearchLightStartPosition`, `getSearchLightEndPosition`, `getSearchLightStartRadius`, `getSearchLightEndRadius`, `getSearchLightColor`, `setSearchLightStartPosition`, `setSearchLightEndPosition`, `setSearchLightStartRadius`, `setSearchLightEndRadius`, `setSearchLightColor`
 
 #### CLuaTeamDefs
 
-Missing (6): `getTeamFromName`, `getTeamName`, `getTeamColor`, `getTeamFriendlyFire`, `getPlayersInTeam`, `countPlayersInTeam`
+Implemented (6): `getTeamFromName`, `getTeamName`, `getTeamColor`, `getTeamFriendlyFire`, `getPlayersInTeam`, `countPlayersInTeam`
 
 #### CLuaTimerDefs
 
@@ -269,9 +253,7 @@ Implemented (18): `xmlCreateFile`, `xmlLoadFile`, `xmlLoadString`, `xmlCopyFile`
 
 #### CLuaClientDefs
 
-Implemented (10): `setTransferBoxVisible`, `isTransferBoxVisible`, `isTransferBoxAlwaysVisible`, `showChat`, `isChatVisible`, `isChatInputBlocked`, `isCapsLockEnabled`, `getNeonClientSetting`, `setNeonClientSetting`, `resetNeonClientSettings`
-
-Missing (2): `clearDebugBox`, `isMTAWindowFocused`
+Implemented (12): `setTransferBoxVisible`, `isTransferBoxVisible`, `isTransferBoxAlwaysVisible`, `showChat`, `isChatVisible`, `isChatInputBlocked`, `clearDebugBox`, `isMTAWindowFocused`, `isCapsLockEnabled`, `getNeonClientSetting`, `setNeonClientSetting`, `resetNeonClientSettings`
 
 #### CLuaDiscordDefs
 
@@ -291,7 +273,7 @@ Implemented (7): `createFoliage`, `getFoliageSurface`, `setFoliageSurface`, `get
 
 #### CLuaBirdDefs
 
-Missing (20): `createBird`, `getBirdVelocity`, `setBirdVelocity`, `getBirdTargetVelocity`, `setBirdTargetVelocity`, `getBirdSize`, `setBirdSize`, `getBirdColors`, `setBirdColors`, `getBirdWingBeatTime`, `setBirdWingBeatTime`, `getBirdRenderDistance`, `setBirdRenderDistance`, `isBirdCurvedFlightEnabled`, `setBirdCurvedFlightEnabled`, `isBirdShootable`, `setBirdShootable`, `isBirdMovementEnabled`, `setBirdMovementEnabled`, `processBirdGunShot`
+Implemented (20): `createBird`, `getBirdVelocity`, `setBirdVelocity`, `getBirdTargetVelocity`, `setBirdTargetVelocity`, `getBirdSize`, `setBirdSize`, `getBirdColors`, `setBirdColors`, `getBirdWingBeatTime`, `setBirdWingBeatTime`, `getBirdRenderDistance`, `setBirdRenderDistance`, `isBirdCurvedFlightEnabled`, `setBirdCurvedFlightEnabled`, `isBirdShootable`, `setBirdShootable`, `isBirdMovementEnabled`, `setBirdMovementEnabled`, `processBirdGunShot`
 
 #### CLuaBitDefs
 
@@ -299,9 +281,7 @@ Implemented (12): `bitAnd`, `bitNot`, `bitOr`, `bitTest`, `bitXor`, `bitLRotate`
 
 #### CLuaCryptDefs
 
-Implemented (7): `md5`, `sha256`, `hash`, `teaEncode`, `teaDecode`, `base64Encode`, `base64Decode`
-
-Missing (5): `passwordHash`, `generateKeyPair`, `passwordVerify`, `encodeString`, `decodeString`
+Implemented (12): `md5`, `sha256`, `hash`, `teaEncode`, `teaDecode`, `base64Encode`, `base64Decode`, `passwordHash`, `generateKeyPair`, `passwordVerify`, `encodeString`, `decodeString`
 
 #### CLuaFileDefs
 
@@ -317,9 +297,7 @@ Implemented (5): `utfLen`, `utfSeek`, `utfSub`, `utfChar`, `utfCode`
 
 #### CLuaUtilDefs
 
-Implemented (21): `deref`, `ref`, `getTickCount`, `getRealTime`, `split`, `isOOPEnabled`, `getUserdataType`, `print`, `getColorFromString`, `getDistanceBetweenPoints2D`, `getDistanceBetweenPoints3D`, `getEasingValue`, `interpolateBetween`, `toJSON`, `fromJSON`, `pregFind`, `pregReplace`, `pregMatch`, `gettok`, `tocolor`, `getProcessMemoryStats`
-
-Missing (1): `debugSleep`
+Implemented (22): `deref`, `ref`, `getTickCount`, `getRealTime`, `split`, `isOOPEnabled`, `getUserdataType`, `print`, `getColorFromString`, `getDistanceBetweenPoints2D`, `getDistanceBetweenPoints3D`, `getEasingValue`, `interpolateBetween`, `toJSON`, `fromJSON`, `pregFind`, `pregReplace`, `pregMatch`, `debugSleep`, `gettok`, `tocolor`, `getProcessMemoryStats`
 
 #### CLuaBreakEffectDefs
 
@@ -407,10 +385,10 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 
 | Event | Status | Port dispatch site(s) | Desktop registration |
 |---|---|---|---|
-| onClientBirdShot | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2962 | Client/mods/deathmatch/logic/CClientBirdManager.cpp:84 |
+| onClientBirdShot | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3136 | Client/mods/deathmatch/logic/CClientBirdManager.cpp:84 |
 | onClientFireDamage | not fired | - | Client/mods/deathmatch/logic/CClientFireManager.cpp:99 |
-| onClientResourceStart | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2668 | Client/mods/deathmatch/logic/CClientGame.cpp:2730 |
-| onClientResourceStop | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3061, app/src/main/cpp/shared/LuaVMStub.cpp:3067 | Client/mods/deathmatch/logic/CClientGame.cpp:2731 |
+| onClientResourceStart | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2832 | Client/mods/deathmatch/logic/CClientGame.cpp:2730 |
+| onClientResourceStop | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3235, app/src/main/cpp/shared/LuaVMStub.cpp:3241 | Client/mods/deathmatch/logic/CClientGame.cpp:2731 |
 | onClientElementDataChange | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2734 |
 | onClientElementStreamIn | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2735 |
 | onClientElementStreamOut | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2736 |
@@ -496,18 +474,18 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientPaste | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2830 |
 | onClientConsole | fired | app/src/main/cpp/shared/LuaVMStub.cpp:525 | Client/mods/deathmatch/logic/CClientGame.cpp:2833 |
 | onClientCoreCommand | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2834 |
-| onClientChatMessage | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2676, app/src/main/cpp/shared/LuaVMStub.cpp:2684, app/src/main/cpp/shared/LuaVMStub.cpp:2696, app/src/main/cpp/shared/LuaVMStub.cpp:2704, app/src/main/cpp/shared/LuaVMStub.cpp:3052 | Client/mods/deathmatch/logic/CClientGame.cpp:2837 |
+| onClientChatMessage | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2840, app/src/main/cpp/shared/LuaVMStub.cpp:2848, app/src/main/cpp/shared/LuaVMStub.cpp:2860, app/src/main/cpp/shared/LuaVMStub.cpp:2868, app/src/main/cpp/shared/LuaVMStub.cpp:3226 | Client/mods/deathmatch/logic/CClientGame.cpp:2837 |
 | onClientDebugMessage | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2840 |
-| onClientPreRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2787 | Client/mods/deathmatch/logic/CClientGame.cpp:2843 |
+| onClientPreRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2961 | Client/mods/deathmatch/logic/CClientGame.cpp:2843 |
 | onClientPedsProcessed | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2844 |
 | onClientNativeUI | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2845 |
 | onClientHUDRender | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2846 |
-| onClientRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2788 | Client/mods/deathmatch/logic/CClientGame.cpp:2847 |
+| onClientRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2962 | Client/mods/deathmatch/logic/CClientGame.cpp:2847 |
 | onClientMinimize | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2848 |
 | onClientRestore | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2849 |
-| onClientMTAFocusChange | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2850 |
-| onClientClick | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2751 | Client/mods/deathmatch/logic/CClientGame.cpp:2853 |
-| onClientCursorMove | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2732, app/src/main/cpp/shared/LuaVMStub.cpp:2740 | Client/mods/deathmatch/logic/CClientGame.cpp:2854 |
+| onClientMTAFocusChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2928 | Client/mods/deathmatch/logic/CClientGame.cpp:2850 |
+| onClientClick | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2915 | Client/mods/deathmatch/logic/CClientGame.cpp:2853 |
+| onClientCursorMove | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2896, app/src/main/cpp/shared/LuaVMStub.cpp:2904 | Client/mods/deathmatch/logic/CClientGame.cpp:2854 |
 | onClientMarkerHit | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2857 |
 | onClientMarkerLeave | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2858 |
 | onClientPlayerMarkerHit | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2860 |
@@ -545,8 +523,8 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientBrowserConsoleMessage | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2906 |
 | onClientFileDownloadComplete | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2909 |
 | onClientResourceFileDownload | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2911 |
-| onClientTransferBoxProgressChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3187, app/src/main/cpp/shared/LuaVMStub.cpp:3193 | Client/mods/deathmatch/logic/CClientGame.cpp:2912 |
-| onClientTransferBoxVisibilityChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3198, app/src/main/cpp/shared/LuaVMStub.cpp:3203 | Client/mods/deathmatch/logic/CClientGame.cpp:2913 |
+| onClientTransferBoxProgressChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3361, app/src/main/cpp/shared/LuaVMStub.cpp:3367 | Client/mods/deathmatch/logic/CClientGame.cpp:2912 |
+| onClientTransferBoxVisibilityChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3372, app/src/main/cpp/shared/LuaVMStub.cpp:3377 | Client/mods/deathmatch/logic/CClientGame.cpp:2913 |
 | onClientWeaponFire | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2915 |
 | onClientWorldSound | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2917 |
 | onClientWorldObjectDamage | not fired | - | Client/mods/deathmatch/logic/CClientWorldObjectManager.cpp:140 |

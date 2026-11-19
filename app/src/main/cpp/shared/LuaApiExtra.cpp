@@ -4,6 +4,7 @@
 #include "LuaJsonApi.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
+#include "../gtasa/GameEngine.h"
 #include "../net/RemoteCalls.h"
 
 extern "C" {
@@ -11,14 +12,18 @@ extern "C" {
 #include "lauxlib.h"
 }
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <set>
 #include <string>
+#include <strings.h>
+#include <unordered_map>
 
 // Chat line sink (jni/JNI_OnLoad.cpp on Android, stubs/jni_bridge_stub.cpp in the headless build).
 namespace WorldRPG::JniBridge {
@@ -115,14 +120,65 @@ int IsChatVisible(lua_State* L) {
 // toggleControl(control, enabled) / isControlEnabled(control). The state is kept for every name;
 // only "radar" acts on the phone: F11 is bound to the "radar" control (desktop CKeyBinds.cpp:238),
 // and the player map opens on F11 only while that control is enabled. Kind 20 tells the activity.
+static std::mutex g_controlsMutex;
 static std::set<std::string> g_disabledControls;
+static bool g_allMtaControlsEnabled = true;
+
+static const char* const kAllGtaControls[] = {
+    "fire", "next_weapon", "previous_weapon", "forwards", "backwards", "left", "right",
+    "zoom_in", "zoom_out", "enter_exit", "change_camera", "jump", "sprint", "look_behind",
+    "crouch", "action", "walk", "vehicle_fire", "vehicle_secondary_fire", "vehicle_left",
+    "vehicle_right", "steer_forward", "steer_back", "accelerate", "brake_reverse",
+    "radio_next", "radio_previous", "radio_user_track_skip", "horn", "sub_mission",
+    "handbrake", "vehicle_look_left", "vehicle_look_right", "vehicle_look_behind",
+    "vehicle_mouse_look", "special_control_left", "special_control_right",
+    "special_control_down", "special_control_up", "aim_weapon", "conversation_yes",
+    "conversation_no", "group_control_forwards", "group_control_back", "radar"
+};
+
+static const char* const kAnalogControls[] = {
+    "left", "right", "forwards", "backwards",
+    "vehicle_left", "vehicle_right", "steer_forward", "steer_back",
+    "accelerate", "brake_reverse",
+    "special_control_left", "special_control_right", "special_control_up", "special_control_down"
+};
+
+static const char* CanonicalAnalogControl(const char* name) {
+    if (!name) return nullptr;
+    for (const char* ctrl : kAnalogControls) {
+        if (strcasecmp(ctrl, name) == 0) return ctrl;
+    }
+    return nullptr;
+}
+
+static const char* AnalogOppositeControl(const char* canonical) {
+    if (!canonical) return nullptr;
+    if (strcasecmp(canonical, "forwards") == 0) return "backwards";
+    if (strcasecmp(canonical, "backwards") == 0) return "forwards";
+    if (strcasecmp(canonical, "left") == 0) return "right";
+    if (strcasecmp(canonical, "right") == 0) return "left";
+    if (strcasecmp(canonical, "vehicle_left") == 0) return "vehicle_right";
+    if (strcasecmp(canonical, "vehicle_right") == 0) return "vehicle_left";
+    if (strcasecmp(canonical, "steer_forward") == 0) return "steer_back";
+    if (strcasecmp(canonical, "steer_back") == 0) return "steer_forward";
+    if (strcasecmp(canonical, "special_control_left") == 0) return "special_control_right";
+    if (strcasecmp(canonical, "special_control_right") == 0) return "special_control_left";
+    if (strcasecmp(canonical, "special_control_down") == 0) return "special_control_up";
+    if (strcasecmp(canonical, "special_control_up") == 0) return "special_control_down";
+    return nullptr;
+}
+
+static std::unordered_map<std::string, float> g_analogOverrides;
 
 int ToggleControl(lua_State* L) {
     const char* control = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TBOOLEAN);
     const bool enabled = lua_toboolean(L, 2) != 0;
-    if (enabled) g_disabledControls.erase(control);
-    else g_disabledControls.insert(control);
+    {
+        std::lock_guard<std::mutex> lock(g_controlsMutex);
+        if (enabled) g_disabledControls.erase(control);
+        else g_disabledControls.insert(control);
+    }
     if (std::strcmp(control, "radar") == 0) {
         LUA_LOGI("toggleControl radar %d", enabled ? 1 : 0);
         WorldRPG::JniBridge::PostGameLine(20, enabled ? "radar|1" : "radar|0");
@@ -133,7 +189,139 @@ int ToggleControl(lua_State* L) {
 
 int IsControlEnabled(lua_State* L) {
     const char* control = luaL_checkstring(L, 1);
+    std::lock_guard<std::mutex> lock(g_controlsMutex);
     lua_pushboolean(L, g_disabledControls.count(control) == 0 ? 1 : 0);
+    return 1;
+}
+
+// CLuaFunctionDefs.Input.cpp:680-702 and CKeyBinds.cpp:1280-1309.
+int ToggleAllControls(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TBOOLEAN) {
+        LUA_LOGE("Bad argument @ 'toggleAllControls' [Expected bool at argument 1]");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const bool enabled = lua_toboolean(L, 1) != 0;
+    bool gtaControls = true;
+    if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
+        if (lua_type(L, 2) != LUA_TBOOLEAN) {
+            LUA_LOGE("Bad argument @ 'toggleAllControls' [Expected bool at argument 2]");
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        gtaControls = lua_toboolean(L, 2) != 0;
+    }
+    bool mtaControls = true;
+    if (lua_gettop(L) >= 3 && !lua_isnil(L, 3)) {
+        if (lua_type(L, 3) != LUA_TBOOLEAN) {
+            LUA_LOGE("Bad argument @ 'toggleAllControls' [Expected bool at argument 3]");
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        mtaControls = lua_toboolean(L, 3) != 0;
+    }
+    if (gtaControls) {
+        std::lock_guard<std::mutex> lock(g_controlsMutex);
+        if (!enabled) {
+            for (const char* ctrl : kAllGtaControls) {
+                g_disabledControls.insert(ctrl);
+            }
+        } else {
+            g_disabledControls.clear();
+        }
+        WorldRPG::JniBridge::PostGameLine(20, enabled ? "radar|1" : "radar|0");
+    }
+    if (mtaControls) {
+        g_allMtaControlsEnabled = enabled;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaFunctionDefs.Input.cpp:278-300 and CStaticFunctionDefinitions.cpp:7436-7452.
+int GetAnalogControlState(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TSTRING) {
+        LUA_LOGE("Bad argument @ 'getAnalogControlState' [Expected string at argument 1]");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const char* rawName = lua_tostring(L, 1);
+    const char* canonical = CanonicalAnalogControl(rawName);
+    if (!canonical) {
+        LUA_LOGE("Bad argument @ 'getAnalogControlState' [Invalid control name '%s']", rawName ? rawName : "");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    bool rawInput = false;
+    if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
+        if (lua_type(L, 2) != LUA_TBOOLEAN) {
+            LUA_LOGE("Bad argument @ 'getAnalogControlState' [Expected bool at argument 2]");
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        rawInput = lua_toboolean(L, 2) != 0;
+    }
+    if (!rawInput) {
+        std::lock_guard<std::mutex> lock(g_controlsMutex);
+        auto it = g_analogOverrides.find(canonical);
+        if (it != g_analogOverrides.end()) {
+            lua_pushnumber(L, it->second);
+            return 1;
+        }
+    }
+    WorldRPG::Game::OnFootKeys keys{};
+    WorldRPG::Game::CopyOnFoot(0.f, 0.f, 0.f, keys);
+    float val = 0.0f;
+    if (std::strcmp(canonical, "left") == 0) val = keys.stickX < 0 ? static_cast<float>(-keys.stickX) / 128.0f : 0.0f;
+    else if (std::strcmp(canonical, "right") == 0) val = keys.stickX > 0 ? static_cast<float>(keys.stickX) / 128.0f : 0.0f;
+    else if (std::strcmp(canonical, "forwards") == 0) val = keys.stickY < 0 ? static_cast<float>(-keys.stickY) / 128.0f : 0.0f;
+    else if (std::strcmp(canonical, "backwards") == 0) val = keys.stickY > 0 ? static_cast<float>(keys.stickY) / 128.0f : 0.0f;
+    else if (std::strcmp(canonical, "accelerate") == 0) val = keys.sprint ? 1.0f : 0.0f;
+    else if (std::strcmp(canonical, "brake_reverse") == 0) val = keys.jump ? 1.0f : 0.0f;
+    val = std::max(0.0f, std::min(1.0f, val));
+    lua_pushnumber(L, val);
+    return 1;
+}
+
+// CLuaFunctionDefs.Input.cpp:302-339 and CClientPad.cpp:595-640.
+int SetAnalogControlState(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TSTRING) {
+        LUA_LOGE("Bad argument @ 'setAnalogControlState' [Expected string at argument 1]");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const char* rawName = lua_tostring(L, 1);
+    const char* canonical = CanonicalAnalogControl(rawName);
+    if (!canonical) {
+        LUA_LOGE("Bad argument @ 'setAnalogControlState' [Invalid control name '%s']", rawName ? rawName : "");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (lua_gettop(L) < 2 || lua_isnil(L, 2)) {
+        std::lock_guard<std::mutex> lock(g_controlsMutex);
+        g_analogOverrides.erase(canonical);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    if (lua_type(L, 2) != LUA_TNUMBER) {
+        LUA_LOGE("Bad argument @ 'setAnalogControlState' [Expected number at argument 2]");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const double state = lua_tonumber(L, 2);
+    if (!std::isfinite(state)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const float clamped = static_cast<float>(std::max(0.0, std::min(1.0, state)));
+    {
+        std::lock_guard<std::mutex> lock(g_controlsMutex);
+        g_analogOverrides[canonical] = clamped;
+        if (const char* opp = AnalogOppositeControl(canonical)) {
+            g_analogOverrides[opp] = 0.0f;
+        }
+    }
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -595,6 +783,9 @@ void InstallExtraBindings(lua_State* L) {
     SetGlobal(L, "clearChatBox", ClearChatBox);
     SetGlobal(L, "toggleControl", ToggleControl);
     SetGlobal(L, "isControlEnabled", IsControlEnabled);
+    SetGlobal(L, "toggleAllControls", ToggleAllControls);
+    SetGlobal(L, "getAnalogControlState", GetAnalogControlState);
+    SetGlobal(L, "setAnalogControlState", SetAnalogControlState);
     SetGlobal(L, "setMobileRadarArea", SetMobileRadarArea);
     SetGlobal(L, "iprint", Iprint);
     SetGlobal(L, "debugMessage", DebugMessage);

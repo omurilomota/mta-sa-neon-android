@@ -16,6 +16,18 @@ void InstallMtaWindowLua(lua_State* L);
 void MtaWindowSetChatInputActive(bool active);
 bool MtaWindowChatInputActive();
 
+// Desktop CCore::IsFocused (GetForegroundWindow() == GetHookedWindow()). Any thread.
+// The game thread copies this into m_bFocused in OnWindowFocusChange.
+void MtaWindowSetFocused(bool focused);
+bool MtaWindowOsFocused();
+// CClientGame::m_bFocused. VM thread. Updated by MtaWindowTakeFocusChange.
+bool MtaWindowFocused();
+// CClientGame constructor samples IsFocused() and does not fire onClientMTAFocusChange.
+void MtaWindowAdoptFocus();
+// OnWindowFocusChange: one change since the last call. VM thread. Coalesced to the latest
+// value when several reports arrive before the next pump.
+bool MtaWindowTakeFocusChange(bool& state);
+
 // Desktop CCore::OnModUnload (CCore.cpp:2964-2965): a new session starts with the default limit.
 void MtaWindowResetSession();
 

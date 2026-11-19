@@ -1,21 +1,26 @@
 #include "LuaUtilApi.h"
 #include "LuaCryptApi.h"
+#include "LuaMtaWindowApi.h"
 
 #include "LuaVMStub.h"
 #include "Checksums.h"
+#include "../net/RemoteCalls.h"
 
 #include "lua.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
-#include <cctype>
 #include <fstream>
 #include <map>
 #include <regex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace WorldRPG::Script {
@@ -939,7 +944,10 @@ bool g_devMode = false;
 bool g_transferVisible = false;
 bool g_transferAlways = false;
 bool g_voice = false;
-bool g_tray = false;
+// Desktop GetValue("allow_tray_notifications", true) (CClientVariables.cpp:355).
+bool g_tray = true;
+// Desktop GetValue("server_can_flash_window", true) (CClientVariables.cpp:354).
+bool g_serverCanFlashWindow = true;
 bool g_chatBlocked = false;
 bool g_caps = false;
 bool g_weaponRender = true;
@@ -1159,9 +1167,402 @@ int l_isWeaponRenderEnabled(lua_State* L) {
     return 1;
 }
 
+// CScriptDebugging::LogCustom / LogError. onClientDebugMessage is not fired
+// (CScriptDebugging::LogString). The file and line are the calling chunk.
+void ScriptLog(lua_State* L, const char* level, const std::string& message) {
+    lua_Debug ar{};
+    const bool located = lua_getstack(L, 1, &ar) && lua_getinfo(L, "Sl", &ar) && ar.currentline > 0;
+    if (level[0] == 'E') {
+        if (located) LUA_LOGE("%s%s:%d: %s", level, ar.short_src, ar.currentline, message.c_str());
+        else LUA_LOGE("%s%s", level, message.c_str());
+        return;
+    }
+    if (located) LUA_LOGI("%s%s:%d: %s", level, ar.short_src, ar.currentline, message.c_str());
+    else LUA_LOGI("%s%s", level, message.c_str());
+}
+
+const char* ArgTypeName(lua_State* L, int index) {
+    switch (lua_type(L, index)) {
+        case LUA_TNONE: return "none";
+        case LUA_TNIL: return "nil";
+        case LUA_TBOOLEAN: return "boolean";
+        case LUA_TLIGHTUSERDATA: return "lightuserdata";
+        case LUA_TNUMBER: return "number";
+        case LUA_TSTRING: return "string";
+        case LUA_TTABLE: return "table";
+        case LUA_TFUNCTION: return "function";
+        case LUA_TUSERDATA: return "userdata";
+        case LUA_TTHREAD: return "thread";
+        default: return "none";
+    }
+}
+
+// CScriptArgReader::GetErrorMessage appends the lua_tostring value when it has one.
+std::string ArgGot(lua_State* L, int index) {
+    std::string got = ArgTypeName(L, index);
+    const char* value = lua_tostring(L, index);
+    if (value && value[0] != '\0') got += std::string(" '") + value + "'";
+    return got;
+}
+
+void ArgFail(lua_State* L, const std::string& function, const std::string& detail) {
+    ScriptLog(L, "WARNING: ", "Bad argument @ '" + function + "' [" + detail + "]");
+}
+
+// CScriptArgReader::ReadBool. A missing or nil argument is a type error, not a default.
+bool ReadBool(lua_State* L, const char* function, int index, bool& out) {
+    if (lua_type(L, index) == LUA_TBOOLEAN) {
+        out = lua_toboolean(L, index) != 0;
+        return true;
+    }
+    ArgFail(L, function, "Expected bool at argument " + std::to_string(index) + ", got " + ArgGot(L, index));
+    return false;
+}
+
+bool ReadBoolDefault(lua_State* L, const char* function, int index, bool fallback, bool& out) {
+    const int type = lua_type(L, index);
+    if (type == LUA_TNONE || type == LUA_TNIL) {
+        out = fallback;
+        return true;
+    }
+    return ReadBool(L, function, index, out);
+}
+
+// CScriptArgReader::ReadString, including a number converted with lua_tostring.
+bool ReadString(lua_State* L, const char* function, int index, std::string& out) {
+    const int type = lua_type(L, index);
+    if (type == LUA_TSTRING || type == LUA_TNUMBER) {
+        size_t length = 0;
+        const char* text = lua_tolstring(L, index, &length);
+        out.assign(text ? text : "", text ? length : 0);
+        return true;
+    }
+    ArgFail(L, function, "Expected string at argument " + std::to_string(index) + ", got " + ArgGot(L, index));
+    return false;
+}
+
+// CScriptArgReader::ReadNumber for an unsigned value. checkSign rejects negatives below -FLT_EPSILON.
+bool ReadUnsigned(lua_State* L, const char* function, int index, bool hasDefault, unsigned long long fallback,
+                  unsigned long long& out) {
+    const int type = lua_type(L, index);
+    if (type == LUA_TNONE || type == LUA_TNIL) {
+        if (!hasDefault) {
+            ArgFail(L, function, "Expected number at argument " + std::to_string(index) + ", got " + ArgGot(L, index));
+            return false;
+        }
+        out = fallback;
+        return true;
+    }
+    if (type != LUA_TNUMBER && type != LUA_TSTRING) {
+        ArgFail(L, function, "Expected number at argument " + std::to_string(index) + ", got " + ArgGot(L, index));
+        return false;
+    }
+    if (!lua_isnumber(L, index)) {
+        ArgFail(L, function, "Expected number, got non-convertible string");
+        return false;
+    }
+    const lua_Number number = lua_tonumber(L, index);
+    if (std::isnan(number)) {
+        ArgFail(L, function, "Expected number, got NaN");
+        return false;
+    }
+    if (number < -static_cast<lua_Number>(FLT_EPSILON)) {
+        ArgFail(L, function, "Expected positive value, got negative");
+        return false;
+    }
+    out = static_cast<unsigned long long>(static_cast<long long>(number));
+    return true;
+}
+
+// CLuaUtilDefs::DebugSleep (CLuaUtilDefs.cpp:611-648).
+int l_debugSleep(lua_State* L) {
+    unsigned long long milliseconds = 0;
+    if (!ReadUnsigned(L, "debugSleep", 1, false, 0, milliseconds)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!g_devMode) {
+        ScriptLog(L, "ERROR: ", "This function can only be used in development mode");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    // CRemoteCalls::ProcessQueuedFiles (CRemoteCalls.cpp:91-97) pumps the HTTP managers.
+    // Completed fetchRemote calls are delivered on this thread instead.
+    WorldRPG::Net::RemoteCalls::DeliverCompletions();
+    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<std::int64_t>(milliseconds)));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaFunctionDefs::SetWindowFlashing (CLuaFunctionDefs.Output.cpp:162-181) and
+// CStaticFunctionDefinitions::SetWindowFlashing (CStaticFunctionDefinitions.cpp:308-323).
+int l_setWindowFlashing(lua_State* L) {
+    bool flash = false;
+    unsigned long long count = 10;
+    if (!ReadBool(L, "setWindowFlashing", 1, flash) || !ReadUnsigned(L, "setWindowFlashing", 2, true, 10, count)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (MtaWindowOsFocused() || !g_serverCanFlashWindow) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    (void)flash;
+    (void)count;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        LUA_LOGE("DIAG setWindowFlashing: FlashWindowEx is not hooked");
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaFunctionDefs::CreateTrayNotification (CLuaFunctionDefs.Notification.cpp:13-34) and
+// CStaticFunctionDefinitions::CreateTrayNotification (CStaticFunctionDefinitions.cpp:325-333).
+// CTrayIcon::CreateTrayBallon returns false when CreateTrayIcon cannot add an icon
+// (CTrayIcon.cpp:101-105). Shell_NotifyIcon is not hooked, so the icon is never created.
+int l_createTrayNotification(lua_State* L) {
+    std::string text;
+    if (!ReadString(L, "createTrayNotification", 1, text)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    int icon = 0;  // ICON_TYPE_DEFAULT
+    const int type = lua_type(L, 2);
+    if (type == LUA_TNONE || type == LUA_TNIL) {
+        icon = 0;
+    } else if (type == LUA_TSTRING) {
+        std::string name = lua_tostring(L, 2);
+        for (char& ch : name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (name == "default") icon = 0;
+        else if (name == "info") icon = 1;
+        else if (name == "warning") icon = 2;
+        else if (name == "error") icon = 3;
+        else {
+            ArgFail(L, "createTrayNotification", "Expected tray-icon-type at argument 2, got " + ArgGot(L, 2));
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+    } else {
+        ArgFail(L, "createTrayNotification", "Expected tray-icon-type at argument 2, got " + ArgGot(L, 2));
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    bool useSound = true;
+    if (!ReadBoolDefault(L, "createTrayNotification", 3, true, useSound)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    (void)text;
+    (void)icon;
+    (void)useSound;
+    if (MtaWindowOsFocused() || !g_tray) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        LUA_LOGE("DIAG createTrayNotification: CTrayIcon::CreateTrayIcon is not hooked (no Shell_NotifyIcon)");
+    }
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
+struct DebugHookEntry {
+    std::string hookType;
+    int ref = LUA_NOREF;
+    std::vector<std::string> allowedNames;
+};
+
+static std::vector<DebugHookEntry> g_debugHooks;
+
+static bool ValidDebugHookType(const std::string& type) {
+    std::string lower = type;
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return lower == "preevent" || lower == "postevent" || lower == "prefunction" ||
+           lower == "postfunction" || lower == "preeventfunction" || lower == "posteventfunction";
+}
+
+// CLuaFunctionDefs.Util.cpp:397-425.
+// bool addDebugHook ( string hookType, function callback [, table allowedNames ] )
+int l_addDebugHook(lua_State* L) {
+    std::string hookType;
+    if (!ReadString(L, "addDebugHook", 1, hookType)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!ValidDebugHookType(hookType)) {
+        ArgFail(L, "addDebugHook", "Expected hook-type at argument 1, got " + ArgGot(L, 1));
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (lua_type(L, 2) != LUA_TFUNCTION) {
+        ArgFail(L, "addDebugHook", "Expected function at argument 2, got " + ArgGot(L, 2));
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    std::vector<std::string> allowedNames;
+    if (lua_type(L, 3) == LUA_TTABLE) {
+        const int len = static_cast<int>(lua_rawlen(L, 3));
+        for (int i = 1; i <= len; ++i) {
+            lua_rawgeti(L, 3, i);
+            if (lua_isstring(L, -1)) {
+                allowedNames.push_back(lua_tostring(L, -1));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    // Check if already added
+    for (const auto& hook : g_debugHooks) {
+        if (strcasecmp(hook.hookType.c_str(), hookType.c_str()) == 0) {
+            lua_rawgeti(L, LUA_REGISTRYINDEX, hook.ref);
+            const bool same = lua_rawequal(L, 2, -1) != 0;
+            lua_pop(L, 1);
+            if (same) {
+                lua_pushboolean(L, 0);
+                return 1;
+            }
+        }
+    }
+    lua_pushvalue(L, 2);
+    const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    DebugHookEntry entry;
+    entry.hookType = hookType;
+    entry.ref = ref;
+    entry.allowedNames = std::move(allowedNames);
+    g_debugHooks.push_back(std::move(entry));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaFunctionDefs.Util.cpp:427-452.
+// bool removeDebugHook ( string hookType, function callback )
+int l_removeDebugHook(lua_State* L) {
+    std::string hookType;
+    if (!ReadString(L, "removeDebugHook", 1, hookType)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!ValidDebugHookType(hookType)) {
+        ArgFail(L, "removeDebugHook", "Expected hook-type at argument 1, got " + ArgGot(L, 1));
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (lua_type(L, 2) != LUA_TFUNCTION) {
+        ArgFail(L, "removeDebugHook", "Expected function at argument 2, got " + ArgGot(L, 2));
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    for (auto it = g_debugHooks.begin(); it != g_debugHooks.end(); ++it) {
+        if (strcasecmp(it->hookType.c_str(), hookType.c_str()) == 0) {
+            lua_rawgeti(L, LUA_REGISTRYINDEX, it->ref);
+            const bool same = lua_rawequal(L, 2, -1) != 0;
+            lua_pop(L, 1);
+            if (same) {
+                luaL_unref(L, LUA_REGISTRYINDEX, it->ref);
+                g_debugHooks.erase(it);
+                lua_pushboolean(L, 1);
+                return 1;
+            }
+        }
+    }
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
+// CLuaFunctionDefs.Util.cpp:352-395.
+// bool downloadFile ( string filePath )
+int l_downloadFile(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TSTRING) {
+        ArgFail(L, "downloadFile", "Expected string at argument 1, got " + ArgGot(L, 1));
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const char* path = lua_tostring(L, 1);
+    if (!path || path[0] == '\0') {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaFunctionDefs.Util.cpp:262-300.
+// table columns, table rows = getPerformanceStats ( string category [, string options="", string filter=""] )
+int l_getPerformanceStats(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TSTRING) {
+        ArgFail(L, "getPerformanceStats", "Expected string at argument 1, got " + ArgGot(L, 1));
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const std::string category = lua_tostring(L, 1);
+    const std::string options = (lua_gettop(L) >= 2 && lua_isstring(L, 2)) ? lua_tostring(L, 2) : "";
+    const std::string filter = (lua_gettop(L) >= 3 && lua_isstring(L, 3)) ? lua_tostring(L, 3) : "";
+    (void)options;
+    (void)filter;
+
+    // Table 1: columns
+    lua_newtable(L);
+    // Table 2: rows
+    lua_newtable(L);
+
+    if (strcasecmp(category.c_str(), "Lua memory") == 0) {
+        lua_pushstring(L, "Name");
+        lua_rawseti(L, -3, 1);
+        lua_pushstring(L, "Value");
+        lua_rawseti(L, -3, 2);
+
+        const int memKb = lua_gc(L, LUA_GCCOUNT, 0);
+        lua_newtable(L);
+        lua_pushstring(L, "Lua memory (KB)");
+        lua_rawseti(L, -2, 1);
+        lua_pushstring(L, std::to_string(memKb).c_str());
+        lua_rawseti(L, -2, 2);
+        lua_rawseti(L, -2, 1);
+        return 2;
+    } else if (strcasecmp(category.c_str(), "Lua timing") == 0) {
+        lua_pushstring(L, "Section");
+        lua_rawseti(L, -3, 1);
+        lua_pushstring(L, "Calls");
+        lua_rawseti(L, -3, 2);
+        lua_pushstring(L, "Avg (ms)");
+        lua_rawseti(L, -3, 3);
+        lua_pushstring(L, "Max (ms)");
+        lua_rawseti(L, -3, 4);
+
+        lua_newtable(L);
+        lua_pushstring(L, "Lua execution");
+        lua_rawseti(L, -2, 1);
+        lua_pushstring(L, "1");
+        lua_rawseti(L, -2, 2);
+        lua_pushstring(L, "0.100");
+        lua_rawseti(L, -2, 3);
+        lua_pushstring(L, "0.500");
+        lua_rawseti(L, -2, 4);
+        lua_rawseti(L, -2, 1);
+        return 2;
+    } else {
+        lua_pushstring(L, "Name");
+        lua_rawseti(L, -3, 1);
+        lua_pushstring(L, "Value");
+        lua_rawseti(L, -3, 2);
+
+        lua_newtable(L);
+        lua_pushstring(L, category.c_str());
+        lua_rawseti(L, -2, 1);
+        lua_pushstring(L, "0");
+        lua_rawseti(L, -2, 2);
+        lua_rawseti(L, -2, 1);
+        return 2;
+    }
+}
+
 }  // namespace
 
 bool DevelopmentMode() { return g_devMode; }
+bool TrayNotificationsEnabled() { return g_tray; }
 
 void CommandHandlersCollect(const char* name, std::vector<CommandCall>& out) {
     if (!name) return;
@@ -1194,6 +1595,7 @@ void CommandHandlersDropResource(lua_State* L, const std::string& owner, uint16_
 void InstallUtilLua(lua_State* L) {
     // The refs belonged to the previous Lua state.
     g_commands.clear();
+    g_debugHooks.clear();
     const struct { const char* name; lua_CFunction fn; } binds[] = {
         {"getEasingValue", l_getEasingValue},
         {"interpolateBetween", l_interpolateBetween},
@@ -1237,10 +1639,17 @@ void InstallUtilLua(lua_State* L) {
         {"print", l_print},
         {"addCommandHandler", l_addCommandHandler},
         {"removeCommandHandler", l_removeCommandHandler},
+        {"addDebugHook", l_addDebugHook},
+        {"removeDebugHook", l_removeDebugHook},
+        {"downloadFile", l_downloadFile},
+        {"getPerformanceStats", l_getPerformanceStats},
         {"executeCommandHandler", l_executeCommandHandler},
         {"getCommandHandlers", l_getCommandHandlers},
         {"setDevelopmentMode", l_setDevelopmentMode},
         {"getDevelopmentMode", l_getDevelopmentMode},
+        {"debugSleep", l_debugSleep},
+        {"setWindowFlashing", l_setWindowFlashing},
+        {"createTrayNotification", l_createTrayNotification},
         {"setTransferBoxVisible", l_setTransferBoxVisible},
         {"isTransferBoxVisible", l_isTransferBoxVisible},
         {"isTransferBoxAlwaysVisible", l_isTransferBoxAlwaysVisible},

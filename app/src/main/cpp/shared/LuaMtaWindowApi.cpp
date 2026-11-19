@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <mutex>
 #include <strings.h>
 
 namespace WorldRPG::JniBridge { void PostGameLine(int kind, const char* text); }
@@ -26,6 +27,11 @@ std::atomic<bool> g_chatInputActive{false};
 // VM thread only.
 int g_characterLimit = kDefaultCharacterLimit;
 bool g_debugViewVisible = false;
+// CClientGame::m_bFocused. The UI thread writes g_osFocused; the VM thread copies it.
+std::mutex g_focusMutex;
+bool g_osFocused = false;
+bool g_appliedFocus = false;
+bool g_focusDirty = false;
 
 // The phone has no console window and no main menu over the game, so both desktop
 // queries (CConsole::IsVisible, CMainMenu::IsVisible) are always false here.
@@ -99,6 +105,31 @@ int IsMainMenuActive(lua_State* L) {
 int IsMTAWindowActive(lua_State* L) {
     const bool active = g_chatInputActive.load() || kMenuVisible || kConsoleVisible || TransferBoxVisible();
     lua_pushboolean(L, active ? 1 : 0);
+    return 1;
+}
+
+// CLuaClientDefs.cpp:72-76. ArgumentParser has no arguments, so extra values are ignored.
+// CCore::DebugClear (CCore.cpp:1737-1743) clears the debug view when one exists. The phone
+// has no CDebugView, which is the desktop null-view path: nothing is cleared, and the call
+// still returns true.
+int ClearDebugBox(lua_State* L) {
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        LUA_LOGI("DIAG clearDebugBox: CDebugView::Clear is not hooked; there is no debug view");
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaClientDefs.cpp:78-81. Reads CClientGame::m_bFocused, not the live foreground check.
+int IsMTAWindowFocused(lua_State* L) {
+    bool focused = false;
+    {
+        std::lock_guard<std::mutex> lock(g_focusMutex);
+        focused = g_appliedFocus;
+    }
+    lua_pushboolean(L, focused ? 1 : 0);
     return 1;
 }
 
@@ -231,6 +262,37 @@ int GetChatboxLayout(lua_State* L) {
 void MtaWindowSetChatInputActive(bool active) { g_chatInputActive.store(active); }
 bool MtaWindowChatInputActive() { return g_chatInputActive.load(); }
 
+void MtaWindowSetFocused(bool focused) {
+    std::lock_guard<std::mutex> lock(g_focusMutex);
+    g_osFocused = focused;
+    g_focusDirty = focused != g_appliedFocus;
+}
+
+bool MtaWindowOsFocused() {
+    std::lock_guard<std::mutex> lock(g_focusMutex);
+    return g_osFocused;
+}
+
+bool MtaWindowFocused() {
+    std::lock_guard<std::mutex> lock(g_focusMutex);
+    return g_appliedFocus;
+}
+
+void MtaWindowAdoptFocus() {
+    std::lock_guard<std::mutex> lock(g_focusMutex);
+    g_appliedFocus = g_osFocused;
+    g_focusDirty = false;
+}
+
+bool MtaWindowTakeFocusChange(bool& state) {
+    std::lock_guard<std::mutex> lock(g_focusMutex);
+    if (!g_focusDirty) return false;
+    g_appliedFocus = g_osFocused;
+    g_focusDirty = false;
+    state = g_appliedFocus;
+    return true;
+}
+
 void MtaWindowResetSession() { SetCharacterLimit(kDefaultCharacterLimit); }
 
 void InstallMtaWindowLua(lua_State* L) {
@@ -241,6 +303,8 @@ void InstallMtaWindowLua(lua_State* L) {
         {"setDebugViewActive", SetDebugViewActive},
         {"isMainMenuActive", IsMainMenuActive},
         {"isMTAWindowActive", IsMTAWindowActive},
+        {"isMTAWindowFocused", IsMTAWindowFocused},
+        {"clearDebugBox", ClearDebugBox},
         {"isTransferBoxActive", IsTransferBoxActive},
         {"setChatboxCharacterLimit", SetChatboxCharacterLimit},
         {"getChatboxCharacterLimit", GetChatboxCharacterLimit},

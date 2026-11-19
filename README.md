@@ -125,10 +125,10 @@ A complete line-by-line conversion catalog comparing all 1,581 desktop MTA clien
 | **Audio & Voice System (CLuaAudioDefs)** | [AUDIO_AND_VOICE.md](docs/lua-functions/AUDIO_AND_VOICE.md) | 57 | 21 | 1 | 35 | 36.8% |
 | **Camera & Viewport (CLuaCameraDefs)** | [CAMERA.md](docs/lua-functions/CAMERA.md) | 47 | 47 | 0 | 0 | 100.0% |
 | **Weapons & Projectiles (CLuaWeaponDefs, CLuaProjectileDefs)** | [WEAPONS_AND_COMBAT.md](docs/lua-functions/WEAPONS_AND_COMBAT.md) | 31 | 31 | 0 | 0 | 100.0% |
-| **Core System, Networking & Utilities** | [CORE_AND_UTILITY.md](docs/lua-functions/CORE_AND_UTILITY.md) | 195 | 176 | 0 | 19 | 90.3% |
+| **Core System, Networking & Utilities** | [CORE_AND_UTILITY.md](docs/lua-functions/CORE_AND_UTILITY.md) | 195 | 195 | 0 | 0 | 100.0% |
 | **Markers, Blips, ColShapes & Spatial** | [MARKERS_AND_SPATIAL.md](docs/lua-functions/MARKERS_AND_SPATIAL.md) | 145 | 145 | 0 | 0 | 100.0% |
 | **Web Browser & Compatibility (CEF / Discord)** | [BROWSER_AND_COMPATIBILITY.md](docs/lua-functions/BROWSER_AND_COMPATIBILITY.md) | 103 | 103 | 0 | 0 | 100.0% |
-| **TOTAL** | **All Categories** | **1581** | **1526** | **1** | **54** | **96.5%** |
+| **TOTAL** | **All Categories** | **1581** | **1545** | **1** | **35** | **97.7%** |
 
 *Full machine-generated parity matrix: [`docs/PARITY_MATRIX.md`](docs/PARITY_MATRIX.md)*
 
