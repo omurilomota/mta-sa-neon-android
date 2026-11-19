@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Network Keepalive & Multi-Server Protocol Conformance (2026-11-19)
+
+- Network Keepalive (Solution 2): In `NeonJoinProtocol.cpp` (`JoinState::InGameNoticeSent`), added periodic keepalive `SendPureSync` every 1000ms while waiting for resource downloads. Prevents vanilla and standard MTA servers from dropping or timing out mobile clients during asset download and loading phases.
+
 ### Added — Audio & Voice System 100% Parity Completion (2026-11-19)
 
 - Audio & Voice Engine: Ported all 36 remaining client functions across 4 modular lots in `LuaAudioApi.cpp` and `LuaAudioApi.h`, bringing the Audio & Voice System category to 57 of 57 functions (100.0% parity, 0 stubs, 0 missing).

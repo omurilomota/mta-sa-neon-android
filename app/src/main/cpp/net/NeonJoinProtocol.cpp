@@ -1318,7 +1318,17 @@ void NeonJoinClient::Pulse() {
         case JoinState::WaitingModName:
         case JoinState::WaitingIdentity:
         case JoinState::JoinDataSent:
+            if (NowMs() > d.deadlineMs) {
+                d.Fail(std::string("timeout in state ") + JoinStateName(d.state), DisconnectMessages::JoinTimedOut());
+            }
+            break;
         case JoinState::InGameNoticeSent:
+            if (d.net && d.net->IsRakNetConnected()) {
+                const uint32_t now = NowMs();
+                if (now - d.lastSyncMs >= 1000) {
+                    d.SendPureSync();
+                }
+            }
             if (NowMs() > d.deadlineMs) {
                 d.Fail(std::string("timeout in state ") + JoinStateName(d.state), DisconnectMessages::JoinTimedOut());
             }
