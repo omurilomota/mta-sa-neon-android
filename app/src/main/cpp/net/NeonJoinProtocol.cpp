@@ -1513,6 +1513,10 @@ bool NeonJoinClient::ProcessGamePacket(uint8_t gameId, const uint8_t* body, size
                 d.HandleServerJoinComplete(body, length, bitLength);
                 return true;
             }
+            if (gameId == static_cast<uint8_t>(NeonPacketID::PLAYER_JOINDATA) || gameId == 103) {
+                JOIN_LOGI("NeonJoin: ignoring packet %u in state JoinDataSent", static_cast<unsigned>(gameId));
+                return true;
+            }
             break;
         case JoinState::InGameNoticeSent:
             if (gameId == static_cast<uint8_t>(NeonPacketID::SERVER_JOINEDGAME)) {
