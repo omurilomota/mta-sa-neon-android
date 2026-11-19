@@ -1,6 +1,7 @@
 #include "MtaUdpSocket.h"
 
 #include <array>
+#include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
 #include <memory>
@@ -12,6 +13,15 @@
 
 namespace WorldRPG::Net::Mta {
 UdpSocket::~UdpSocket() { Close(); }
+
+std::string UdpSocket::Endpoint() const {
+    sockaddr_in peer{};
+    socklen_t length = sizeof(peer);
+    char address[INET_ADDRSTRLEN]{};
+    if (fd_ < 0 || ::getpeername(fd_, reinterpret_cast<sockaddr*>(&peer), &length) != 0 ||
+        peer.sin_family != AF_INET || !::inet_ntop(AF_INET, &peer.sin_addr, address, sizeof(address))) return {};
+    return std::string(address) + ":" + std::to_string(ntohs(peer.sin_port));
+}
 
 void UdpSocket::Close() {
     if (fd_ >= 0) ::close(fd_);

@@ -90,17 +90,68 @@ public final class EngineHostActivity extends GTASA {
     private volatile boolean netRunning;
     private boolean clientReady;
     private Thread netThread;
+    private int interfaceScalePercent = InterfaceScale.DEFAULT_PERCENT;
+    private int reportedUiWidth;
+    private int reportedUiHeight;
 
     private native boolean nativeInit();
     private native boolean nativeSetAssetPath(String assetPath);
     private native boolean nativeConnect(String ip, int port, String nickname);
+    private native boolean nativeSetNetworkSerial(String serial);
+    private native boolean nativeCancelIdentityRequest(long requestId);
+    private native void nativeProvideIdentityTicket(long requestId, String ticket, String error);
+    private com.worldrpg.neonlauncher.ui.NeonIdentityUi identityUi;
+
+    public int getNativeJoinProfile() {
+        return getIntent().getIntExtra("join_profile", 0);
+    }
+
+    public void onNativeIdentityRequest(long requestId, String serverId, String endpoint, int mode) {
+        // JNI can be holding the state mutex. Always queue before calling JNI back.
+        mapHandler.post(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (identityUi == null) identityUi = new com.worldrpg.neonlauncher.ui.NeonIdentityUi(this);
+            if (mode == 2 && !identityUi.isSignedIn()) {
+                // Browser login can take minutes. Release the pending server connection,
+                // then restart with a fresh ticket after authentication succeeds.
+                if (!nativeCancelIdentityRequest(requestId)) return;
+                if (loadingView != null) loadingView.end();
+                hideDownload();
+                new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                    .setTitle("SA:O account")
+                    .setMessage("This server requires SA:O sign-in. Connect your Discord account to continue.")
+                    .setPositiveButton("Sign in with Discord", (dialog, which) -> identityUi.signIn(() -> {
+                        retryPending = true;
+                        if (!nativeConnect(connectIp, connectPort, connectNick)) {
+                            retryPending = false;
+                            showDisconnectDialog("SA:O account", "Unable to restart the server connection. Please retry.");
+                        }
+                    }, message -> showDisconnectDialog("SA:O account", message)))
+                    .setNegativeButton(android.R.string.cancel, (dialog, which) ->
+                        showDisconnectDialog("SA:O account", "Sign in to your SA:O account before connecting to this server."))
+                    .setCancelable(false).show();
+                return;
+            }
+            identityUi.authorize(serverId, endpoint, mode == 2,
+                ticket -> nativeProvideIdentityTicket(requestId, ticket, ""),
+                error -> nativeProvideIdentityTicket(requestId, "", error));
+        });
+    }
     private native void nativePulse();
     private native void nativeDestroy();
     private native void nativeSetScreenSize(int width, int height);
 
     private void reportDxScreen(int width, int height) {
         if (!clientReady || width <= 0 || height <= 0) return;
-        nativeSetScreenSize(width, height);
+        float density = getResources().getDisplayMetrics().density;
+        int logicalWidth = InterfaceScale.logicalSize(width, density, interfaceScalePercent);
+        int logicalHeight = InterfaceScale.logicalSize(height, density, interfaceScalePercent);
+        if (logicalWidth == reportedUiWidth && logicalHeight == reportedUiHeight) return;
+        nativeSetScreenSize(logicalWidth, logicalHeight);
+        reportedUiWidth = logicalWidth;
+        reportedUiHeight = logicalHeight;
+        Log.i(TAG, "Interface viewport " + width + "x" + height + " -> " + logicalWidth + "x"
+                + logicalHeight + " density=" + density + " scale=" + interfaceScalePercent + "%");
     }
     private native void nativeCursorEvent(int action, float x, float y);
     private native void nativeScriptInput(String text, int backspaces, String key);
@@ -166,11 +217,15 @@ public final class EngineHostActivity extends GTASA {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        EngineDiagnostics.begin(this);
         try {
             String installed = new NativeAssetBridge(this).getReadyStoragePath();
             if (installed == null) throw new IOException("Sincronize os arquivos do jogo antes de testar o GTA.");
             File generation = new File(installed).getCanonicalFile();
             gameDirectory = generation.getPath() + File.separator;
+            GpuTextureSupport gpu = GpuProbe.inspect();
+            EngineDiagnostics.noteGpu(this, gpu);
+            gpu.validate(generation);
             EngineCaseAliases.prepare(generation);
             validateLevelDefinitions(generation);
             // The VM calls the engine's JNI_OnLoad and registers the native
@@ -187,6 +242,7 @@ public final class EngineHostActivity extends GTASA {
             Log.i(TAG, "Native GTA host prepared with generation " + generation.getName());
         } catch (IOException | LinkageError | SecurityException error) {
             bootError = error.getMessage() == null ? "Nao foi possivel preparar a engine GTA." : error.getMessage();
+            EngineDiagnostics.failure(this, bootError);
             setResult(RESULT_CANCELED, new Intent().putExtra(EXTRA_BOOT_ERROR, bootError));
             Log.e(TAG, "Native GTA host preparation failed", error);
         }
@@ -209,6 +265,14 @@ public final class EngineHostActivity extends GTASA {
         if (ready) startMtaSession();
     }
 
+    @Override
+    public void onResume() {
+        super.onResume();
+        // The launcher can change this while the separate engine process is paused.
+        interfaceScalePercent = InterfaceScaleSettings.read(this);
+        if (dxOverlay != null) reportDxScreen(dxOverlay.getWidth(), dxOverlay.getHeight());
+    }
+
     private void startMtaSession() {
         String ip = getIntent().getStringExtra(GameActivity.EXTRA_SERVER_IP);
         if (ip == null || ip.isEmpty()) ip = BuildConfig.DEFAULT_SERVER_IP;
@@ -228,6 +292,13 @@ public final class EngineHostActivity extends GTASA {
             return;
         }
         clientReady = true;
+        try {
+            if (!nativeSetNetworkSerial(com.worldrpg.neonlauncher.network.NetDeviceIdentity.get(this)))
+                throw new IllegalStateException("Unable to set network identity");
+        } catch (RuntimeException error) {
+            showDisconnectDialog("Error", "Unable to initialize this device's network identity. Please restart the launcher.");
+            return;
+        }
         int screenW = dxOverlay != null ? dxOverlay.getWidth() : 0;
         int screenH = dxOverlay != null ? dxOverlay.getHeight() : 0;
         if (screenW <= 0 || screenH <= 0) {
@@ -235,7 +306,8 @@ public final class EngineHostActivity extends GTASA {
             screenW = metrics.widthPixels;
             screenH = metrics.heightPixels;
         }
-        nativeSetScreenSize(screenW, screenH);
+        interfaceScalePercent = InterfaceScaleSettings.read(this);
+        reportDxScreen(screenW, screenH);
         String nick = new PreferencesManager(this).getUsername();
         if (nick == null || nick.isEmpty()) nick = BuildConfig.DEFAULT_PLAYER_NICK;
         connectIp = ip;
@@ -759,7 +831,10 @@ public final class EngineHostActivity extends GTASA {
 
     @SuppressWarnings("unused")
     public void onNativeConnectionStateChange(boolean connected, String message) {
-        runOnUiThread(() -> {
+        // Ticket completion originates on the UI thread too; defer native callbacks
+        // until the JNI state mutex has been released before updating controls.
+        mapHandler.post(() -> {
+            if (isFinishing() || isDestroyed()) return;
             if (connected) {
                 joinedOnce = true;
                 retryPending = false;
@@ -1453,6 +1528,17 @@ public final class EngineHostActivity extends GTASA {
             if (chatLog != null) chatLog.setChatVisible(shown);
         }
 
+        @Override public int getInterfaceScalePercent() {
+            return interfaceScalePercent;
+        }
+
+        @Override public boolean setInterfaceScalePercent(int percent) {
+            if (!InterfaceScaleSettings.save(EngineHostActivity.this, percent)) return false;
+            interfaceScalePercent = InterfaceScale.clampPercent(percent);
+            if (dxOverlay != null) reportDxScreen(dxOverlay.getWidth(), dxOverlay.getHeight());
+            return true;
+        }
+
         @Override public void onClose() {
             showSettings(false);
             showMtaPause(true);
@@ -1526,6 +1612,7 @@ public final class EngineHostActivity extends GTASA {
     @Override
     protected void onEngineBootstrapError(String message) {
         bootError = message;
+        EngineDiagnostics.failure(this, message);
         Log.e(TAG, message);
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
@@ -1536,6 +1623,7 @@ public final class EngineHostActivity extends GTASA {
 
     @Override
     public void onDestroy() {
+        if (identityUi != null) identityUi.close();
         releaseWifiLock();
         for (Integer id : new java.util.ArrayList<>(sounds.keySet())) stopUrlSound(Integer.toString(id));
         if (transferBox != null) transferBox.setProgress(0, 0);
@@ -1549,6 +1637,7 @@ public final class EngineHostActivity extends GTASA {
         }
         super.onDestroy();
         if (!isChangingConfigurations()) {
+            EngineDiagnostics.end(this);
             // GTA owns process-wide singletons that survive JNI cleanup. This
             // Activity runs in :engine, so a later launch gets a fresh engine
             // while the launcher and its downloads remain alive.

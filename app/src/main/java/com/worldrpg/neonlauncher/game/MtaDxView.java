@@ -105,6 +105,10 @@ public final class MtaDxView extends View {
 
     private CursorListener cursorListener;
     private boolean cursorShown;
+    // Each frame carries the logical viewport that produced its coordinates.
+    // Offscreen bitmaps keep their own pixel dimensions and are never DPI-scaled here.
+    private int viewportWidth;
+    private int viewportHeight;
 
     public void setCursorListener(CursorListener listener) {
         cursorListener = listener;
@@ -120,16 +124,18 @@ public final class MtaDxView extends View {
     @Override
     public boolean onTouchEvent(android.view.MotionEvent event) {
         if (!cursorShown || cursorListener == null) return false;
+        float x = InterfaceScale.toLogical(event.getX(), getWidth(), viewportWidth);
+        float y = InterfaceScale.toLogical(event.getY(), getHeight(), viewportHeight);
         switch (event.getActionMasked()) {
             case android.view.MotionEvent.ACTION_DOWN:
-                cursorListener.onCursor(0, event.getX(), event.getY());
+                cursorListener.onCursor(0, x, y);
                 break;
             case android.view.MotionEvent.ACTION_MOVE:
-                cursorListener.onCursor(2, event.getX(), event.getY());
+                cursorListener.onCursor(2, x, y);
                 break;
             case android.view.MotionEvent.ACTION_UP:
             case android.view.MotionEvent.ACTION_CANCEL:
-                cursorListener.onCursor(1, event.getX(), event.getY());
+                cursorListener.onCursor(1, x, y);
                 break;
             default:
                 break;
@@ -152,21 +158,39 @@ public final class MtaDxView extends View {
         String commands = frames.take();
         if (commands.isEmpty()) return;
         String[] lines = commands.split("\n");
+        for (String line : lines) {
+            if (!line.startsWith("V ")) continue;
+            String[] dimensions = line.substring(2).split(" ");
+            if (dimensions.length != 2) continue;
+            try {
+                int width = Integer.parseInt(dimensions[0]), height = Integer.parseInt(dimensions[1]);
+                if (width > 0 && height > 0) {
+                    viewportWidth = width;
+                    viewportHeight = height;
+                }
+            } catch (NumberFormatException ignored) {}
+        }
         // Every frame starts in "blend"; a "B" line at the top carries a mode set in an earlier frame.
         setBlendMode(0);
         selectFont("");
         // The screen, or the bitmap of the render target selected by a "G" line.
         Canvas screen = canvas;
-        for (String line : lines) {
-            try {
-                canvas = drawLineOfFrame(canvas, screen, line);
-            } catch (RuntimeException error) {
-                // One bad draw line (a bitmap freed by the script thread, a vertex count Canvas
-                // refuses) must not take the Activity down.
+        screen.save();
+        try {
+            if (viewportWidth > 0 && viewportHeight > 0 && getWidth() > 0 && getHeight() > 0)
+                screen.scale((float) getWidth() / viewportWidth, (float) getHeight() / viewportHeight);
+            for (String line : lines) {
+                try {
+                    canvas = drawLineOfFrame(canvas, screen, line);
+                } catch (RuntimeException error) {
+                    // One bad draw command must not take the Activity down.
+                }
             }
+        } finally {
+            screen.restore();
+            setBlendMode(0);
+            selectFont("");
         }
-        setBlendMode(0);
-        selectFont("");
     }
 
     private Canvas drawLineOfFrame(Canvas canvas, Canvas screen, String line) {
@@ -629,7 +653,7 @@ public final class MtaDxView extends View {
         if (!(right > x && bottom > y)) return;
         float scale = f(p[4]);
         text.setColor((int) l(p[5]));
-        // The draw line is in the pixels that guiGetScreenSize reports (no density factor).
+        // Text measurement and drawing share logical pixels; the screen canvas applies DPI.
         // Desktop draws the default font at 15 px times the scale (CGraphics fontInfos).
         text.setTextSize(textBase * scale);
         CharSequence shown = "1".equals(p[6]) ? MtaChatView.colorize(p[7]) : p[7];

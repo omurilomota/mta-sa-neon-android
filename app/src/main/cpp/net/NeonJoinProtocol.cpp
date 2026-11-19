@@ -8,11 +8,13 @@
 #include "../shared/entity/EntityVehicleModels.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <unordered_map>
 #include <vector>
 
@@ -31,6 +33,7 @@ namespace WorldRPG::Net {
 
 namespace {
 RakNetWrapper* g_joinedNet = nullptr;
+std::atomic<uint64_t> g_identitySequence{0};
 
 uint32_t NowMs() {
     return static_cast<uint32_t>(
@@ -123,6 +126,7 @@ const char* JoinStateName(JoinState state) {
         case JoinState::Idle: return "idle";
         case JoinState::WaitingRakNet: return "waiting-raknet";
         case JoinState::WaitingModName: return "waiting-mod-name";
+        case JoinState::WaitingIdentity: return "waiting-identity";
         case JoinState::JoinDataSent: return "joindata-sent";
         case JoinState::ServerJoinComplete: return "server-join-complete";
         case JoinState::InGameNoticeSent: return "ingame-notice-sent";
@@ -138,12 +142,17 @@ struct NeonJoinClient::Impl {
     JoinState state = JoinState::Idle;
     NeonJoinInfo info;
     StateCallback callback;
+    IdentityCallback identityCallback;
+    uint64_t identityRequestId = 0;
     std::string nickname;
+    std::string password;
+    std::string identityTicket;
+    JoinProfile requestedProfile = JoinProfile::Automatic;
     uint32_t deadlineMs = 0;
 
     void SetState(JoinState next, const char* detail) {
         state = next;
-        deadlineMs = NowMs() + JOIN_STEP_TIMEOUT_MS;
+        deadlineMs = NowMs() + (next == JoinState::WaitingIdentity ? 20000 : JOIN_STEP_TIMEOUT_MS);
         JOIN_LOGI("NeonJoin: state -> %s (%s)", JoinStateName(next), detail ? detail : "");
         if (callback) callback(next, detail ? detail : "");
     }
@@ -1013,44 +1022,23 @@ struct NeonJoinClient::Impl {
                                PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
     }
 
-    // The Oracle net.so hook only finishes a join when it sees game packet 19
-    // (PACKET_ID_MTA_RESERVED_13) of at least 700 bytes with the bytes
-    // "1.6.0-" between offsets 650 and 699. It then rewrites the 8 bytes
-    // before that marker into PLAYER_JOINDATA. A compact packet 4 is logged
-    // and dropped, and net.so closes the socket.
     bool SendJoinData() {
         BitStreamWriter w;
-        w.Write(static_cast<uint8_t>(19));
-        // Known-good mobile blob is 763 bytes with the marker at offset 676
-        // and a 95-byte join body at offset 668. 667 zero bytes put that
-        // body there when the packet id occupies byte 0.
-        const std::vector<uint8_t> pad(667, 0);
-        w.WriteBytes(pad.data(), pad.size());
-
-        w.Write(NEON_NETCODE_VERSION);      // ushort, overwritten by the hook
-        w.Write(NEON_MTA_VERSION);          // ushort
-        w.Write(NEON_BITSTREAM_VERSION);    // ushort, overwritten to 0x0030
-
-        // 15 characters, so the hook's in-place rewrite to
-        // "1.7.0-9.29999.0" keeps the length prefix valid. With the id and
-        // the 667-byte pad, the marker lands at offset 676.
-        WriteStringRaw(w, "1.6.0-9.29999.0");
-
-        WriteBit(w, false);                 // optional update info required
-        w.Write(NEON_GAME_VERSION);         // uchar game version
-
-        const std::string nick = NormalizeAscii(nickname);
-        WriteFixedRaw(w, nick, NEON_MAX_PLAYER_NICK_LENGTH);
-
-        const uint8_t emptyPasswordMd5[16] = {0};
-        w.WriteBytes(emptyPasswordMd5, 16); // MD5 of empty password is zeros
-
-        WriteFixedRaw(w, std::string(), NEON_MAX_SERIAL_LENGTH); // legacy community field
-
-        // No trailing ticket. The 95-byte body captured from the working
-        // mobile client ends on the 32-byte legacy field. Neon reads a
-        // ticket only when another length prefix is present.
+        const bool valid = BuildJoinData(info.joinProfile, nickname, password, identityTicket, w);
+        identityTicket.clear(); // Tickets are consumed once, including failed sends.
+        if (!valid) return false;
+        JOIN_LOGI("NeonJoin: sending logical packet %u profile=%s bitstream=0x30",
+                  info.joinProfile == JoinProfile::LegacyMobile ? 19 : 4,
+                  info.joinProfile == JoinProfile::LegacyMobile ? "legacy-mobile" : "standard");
         return SendUpe(w);
+    }
+
+    void FinishJoinData() {
+        if (!SendJoinData()) {
+            Fail("failed to send PLAYER_JOINDATA", DisconnectMessages::TransportFailure(DisconnectMessages::Transport::Other, false));
+            return;
+        }
+        SetState(JoinState::JoinDataSent, "PLAYER_JOINDATA sent");
     }
 
     // [99][RPC][uchar rpcId] — CNetAPI::RPC envelope, no arguments for the
@@ -1094,19 +1082,25 @@ struct NeonJoinClient::Impl {
             Fail("unsupported mod '" + modName + "'", DisconnectMessages::Plain("Error", "This server runs the mod '" + modName + "', which this client cannot join."));
             return;
         }
-        if (info.authMode == NeonAuthMode::Required) {
-            Fail("server requires SA:O (Neon Identity) sign-in; not implemented", DisconnectMessages::Plain("Error", "This server requires San Andreas Online sign-in, which this client does not support yet."));
-            return;
+        if (net) {
+            const std::string endpoint = net->GetConnectedServer(true);
+            const auto colon = endpoint.rfind(':');
+            const uint16_t port = colon == std::string::npos ? 0 : static_cast<uint16_t>(std::strtoul(endpoint.c_str() + colon + 1, nullptr, 10));
+            info.joinProfile = SelectJoinProfile(net->GetConnectedServer(false), port, requestedProfile);
         }
-
         JOIN_LOGI("NeonJoin: MOD_NAME mod=%s bs=0x%X auth=%u",
                   modName.c_str(), bsVersion, static_cast<unsigned>(info.authMode));
-
-        if (!SendJoinData()) {
-            Fail("failed to send PLAYER_JOINDATA", DisconnectMessages::TransportFailure(DisconnectMessages::Transport::Other, false));
+        if (info.authMode != NeonAuthMode::Disabled && identityCallback) {
+            identityRequestId = ++g_identitySequence;
+            SetState(JoinState::WaitingIdentity, "authorizing SA:O server connection");
+            identityCallback(identityRequestId, info.neonServerId, net->GetPeerEndpoint(), info.authMode);
             return;
         }
-        SetState(JoinState::JoinDataSent, "PLAYER_JOINDATA sent");
+        if (info.authMode == NeonAuthMode::Required) {
+            Fail("SA:O identity callback unavailable", DisconnectMessages::Plain("SA:O account", "Sign in to your SA:O account before connecting to this server."));
+            return;
+        }
+        FinishJoinData();
     }
 
     // SERVER_JOIN_COMPLETE: [String connText][String versionSortable]
@@ -1250,14 +1244,8 @@ struct NeonJoinClient::Impl {
 NeonJoinClient::NeonJoinClient() : pImpl_(std::make_unique<Impl>()) {}
 NeonJoinClient::~NeonJoinClient() = default;
 
-bool NeonJoinClient::Begin(RakNetWrapper& net, const std::string& nickname, const std::string& password) {
-    if (!password.empty()) {
-        // Empty password hashes to 16 zero bytes, which matches the server's
-        // expectation for unpassworded servers. A real password needs MD5;
-        // refuse explicitly instead of sending a wrong hash.
-        pImpl_->Fail("password-protected servers not supported yet (MD5 pending)", DisconnectMessages::Plain("Error", "This server is password protected. Passwords are not supported on this client yet."));
-        return false;
-    }
+bool NeonJoinClient::Begin(RakNetWrapper& net, const std::string& nickname, const std::string& password,
+                           JoinProfile profile) {
     const std::string normalized = NormalizeAscii(nickname);
     if (normalized.empty() || normalized.size() > NEON_MAX_PLAYER_NICK_LENGTH) {
         pImpl_->Fail("invalid nickname length", DisconnectMessages::InvalidNick());
@@ -1265,8 +1253,42 @@ bool NeonJoinClient::Begin(RakNetWrapper& net, const std::string& nickname, cons
     }
     pImpl_->net = &net;
     pImpl_->nickname = normalized;
+    pImpl_->password = password;
+    pImpl_->identityTicket.clear();
+    pImpl_->identityRequestId = 0;
     pImpl_->info = NeonJoinInfo{};
+    pImpl_->requestedProfile = profile;
     pImpl_->SetState(JoinState::WaitingRakNet, "waiting for RakNet connect");
+    return true;
+}
+
+void NeonJoinClient::SetIdentityCallback(IdentityCallback callback) {
+    pImpl_->identityCallback = std::move(callback);
+}
+
+bool NeonJoinClient::CancelIdentityRequest(uint64_t requestId) {
+    if (!requestId || pImpl_->state != JoinState::WaitingIdentity || pImpl_->identityRequestId != requestId) return false;
+    pImpl_->identityRequestId = 0;
+    pImpl_->identityTicket.clear();
+    pImpl_->state = JoinState::Idle;
+    return true;
+}
+
+bool NeonJoinClient::ProvideIdentityTicket(uint64_t requestId, const std::string& ticket, const std::string& error) {
+    Impl& d = *pImpl_;
+    if (d.state != JoinState::WaitingIdentity || !requestId || d.identityRequestId != requestId) return false;
+    if (!error.empty()) {
+        d.Fail("Neon Identity authorization failed", DisconnectMessages::Plain("SA:O account", error));
+    } else if (ticket.size() > 4096 || ticket.find('\0') != std::string::npos) {
+        d.Fail("invalid Neon ticket length", DisconnectMessages::Plain("SA:O account", "The account service returned an invalid connection ticket."));
+    } else if (ticket.empty() && d.info.authMode == NeonAuthMode::Required) {
+        d.Fail("required Neon ticket missing", DisconnectMessages::Plain("SA:O account", "Sign in to your SA:O account before connecting to this server."));
+    } else if (!ticket.empty() && d.info.joinProfile == JoinProfile::LegacyMobile) {
+        d.Fail("legacy bridge cannot carry Neon ticket", DisconnectMessages::Plain("SA:O account", "This server's legacy mobile bridge cannot carry SA:O tickets. Select Standard connection mode or ask the server owner to update the bridge."));
+    } else {
+        d.identityTicket = ticket;
+        d.FinishJoinData();
+    }
     return true;
 }
 
@@ -1294,6 +1316,7 @@ void NeonJoinClient::Pulse() {
             }
             break;
         case JoinState::WaitingModName:
+        case JoinState::WaitingIdentity:
         case JoinState::JoinDataSent:
         case JoinState::InGameNoticeSent:
             if (NowMs() > d.deadlineMs) {
@@ -1560,7 +1583,11 @@ void NeonJoinClient::Reset() {
     pImpl_->state = JoinState::Idle;
     pImpl_->info = NeonJoinInfo{};
     pImpl_->nickname.clear();
+    pImpl_->password.clear();
+    pImpl_->identityTicket.clear();
+    pImpl_->identityRequestId = 0;
     pImpl_->callback = {};
+    pImpl_->identityCallback = {};
 }
 
 } // namespace WorldRPG::Net

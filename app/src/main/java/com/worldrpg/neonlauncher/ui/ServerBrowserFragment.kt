@@ -60,12 +60,17 @@ class ServerBrowserFragment : Fragment() {
     private fun loadServers() {
         loadJob?.cancel()
         binding.emptyState.visibility = View.GONE
+        binding.browserStatus.visibility = View.GONE
+        binding.swipeRefresh.isRefreshing = true
         loadJob = viewLifecycleOwner.lifecycleScope.launch {
             browserService.fetchServerList(prefsManager.getFavorites()).collect { state ->
                 when (state) {
                     is ServerBrowserService.BrowserState.Loading -> Unit
                     is ServerBrowserService.BrowserState.Success -> showServers(state.servers)
-                    is ServerBrowserService.BrowserState.Error -> showServers(emptyList())
+                    is ServerBrowserService.BrowserState.Error -> _binding?.let {
+                        it.browserStatus.setText(R.string.neon_registry_unavailable)
+                        it.browserStatus.visibility = View.VISIBLE
+                    }
                 }
             }
             _binding?.swipeRefresh?.isRefreshing = false
@@ -74,8 +79,9 @@ class ServerBrowserFragment : Fragment() {
 
     private fun showServers(list: List<ServerInfo>) {
         val b = _binding ?: return
-        servers = list
-        serverAdapter.submitList(list)
+        val favoriteKeys = prefsManager.getFavorites()
+        servers = list.map { it.copy(isFavorite = it.getKey() in favoriteKeys) }
+        serverAdapter.submitList(servers)
         b.emptyState.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
         val online = list.filter { it.status == ServerInfo.Status.ONLINE }
         val players = online.sumOf { it.players }
@@ -103,6 +109,7 @@ class ServerBrowserFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        loadJob?.cancel()
         super.onDestroyView()
         _binding = null
     }

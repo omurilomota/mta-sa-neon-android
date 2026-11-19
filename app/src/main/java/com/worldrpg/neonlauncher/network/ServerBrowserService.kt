@@ -1,17 +1,24 @@
 package com.worldrpg.neonlauncher.network
 
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /**
- * Server list: the server configured in .env plus the player's favorites, each
- * queried live over ASE ([ServerQuery]). There is no master server list yet.
+ * The same official catalogue as CServerBrowserWeb::CNeonServerRegistry, followed
+ * by live ASE queries. A failed refresh retains the last successful catalogue.
  */
-class ServerBrowserService {
+class ServerBrowserService(
+    private val fetchRegistry: suspend () -> List<ServerInfo> = { NeonServerRegistry.fetch() },
+    private val queryServer: suspend (String, Int) -> ServerQuery.Result? = { host, port -> ServerQuery.query(host, port) }
+) {
+    private var cachedRegistry: List<ServerInfo>? = null
 
     sealed class BrowserState {
         object Loading : BrowserState()
@@ -25,26 +32,35 @@ class ServerBrowserService {
      */
     fun fetchServerList(favoriteKeys: Set<String> = emptySet()): Flow<BrowserState> = channelFlow {
         send(BrowserState.Loading)
-        val configured = ServerInfo.configured()
-        val keys = LinkedHashSet<String>().apply {
-            add(configured.getKey())
-            addAll(favoriteKeys.sorted())
+        val catalogue = try {
+            fetchRegistry().also { cachedRegistry = it }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            send(BrowserState.Error("Unable to refresh the Neon server list. Showing available servers."))
+            cachedRegistry ?: buildList {
+                add(ServerInfo.configured())
+                favoriteKeys.sorted().filter { ServerAddress.fromKey(it) != null }
+                    .forEach { add(ServerInfo.fromFavoriteKey(it)) }
+            }
         }
-        val servers = keys.map { key ->
-            (if (key == configured.getKey()) configured else ServerInfo.fromFavoriteKey(key))
-                .copy(isFavorite = key in favoriteKeys)
+        val servers = catalogue.distinctBy { it.getKey() }.map {
+            it.copy(status = ServerInfo.Status.QUERYING, isFavorite = it.getKey() in favoriteKeys)
         }.toMutableList()
         send(BrowserState.Success(servers.toList()))
 
         val lock = Mutex()
+        val permits = Semaphore(12)
         coroutineScope {
             servers.indices.forEach { index ->
                 launch {
-                    val s = servers[index]
-                    val result = ServerQuery.query(s.ip, s.port)
-                    lock.withLock {
-                        servers[index] = servers[index].withQuery(result)
-                        send(BrowserState.Success(servers.toList()))
+                    permits.withPermit {
+                        val s = servers[index]
+                        val result = queryServer(s.ip, s.port)
+                        lock.withLock {
+                            servers[index] = servers[index].withQuery(result)
+                            send(BrowserState.Success(servers.toList()))
+                        }
                     }
                 }
             }
@@ -53,5 +69,5 @@ class ServerBrowserService {
 
     /** Queries one server. */
     suspend fun refresh(server: ServerInfo): ServerInfo =
-        server.withQuery(ServerQuery.query(server.ip, server.port))
+        server.withQuery(queryServer(server.ip, server.port))
 }

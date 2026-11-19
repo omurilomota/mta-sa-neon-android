@@ -458,6 +458,22 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
         return JNI_FALSE;
     }
 
+    activityClass = env->GetObjectClass(thiz);
+    jmethodID identityCallback = env->GetMethodID(activityClass, "onNativeIdentityRequest", "(JLjava/lang/String;Ljava/lang/String;I)V");
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(activityClass);
+    if (identityCallback) state->join->SetIdentityCallback([identityCallback](uint64_t requestId, const std::string& serverId,
+            const std::string& endpoint, WorldRPG::Net::NeonAuthMode mode) {
+        WorldRPG::JniBridge::EnvScope scope;
+        if (!scope.env || !g_gameActivityRef) return;
+        jstring id = scope.env->NewStringUTF(serverId.c_str());
+        jstring address = scope.env->NewStringUTF(endpoint.c_str());
+        if (id && address) scope.env->CallVoidMethod(g_gameActivityRef, identityCallback, static_cast<jlong>(requestId), id, address, static_cast<jint>(mode));
+        if (id) scope.env->DeleteLocalRef(id);
+        if (address) scope.env->DeleteLocalRef(address);
+        if (scope.env->ExceptionCheck()) scope.env->ExceptionClear();
+    });
+
     jobject activityRef = env->NewGlobalRef(thiz);
     if (!activityRef) return JNI_FALSE;
     g_gameActivityRef = activityRef;
@@ -585,7 +601,15 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
     // The Neon join handshake (PLAYER_JOIN -> MOD_NAME -> PLAYER_JOINDATA ->
     // SERVER_JOIN_COMPLETE -> RPCs -> SERVER_JOINEDGAME) is driven by
     // NeonJoinClient from nativePulse once the transport is up.
-    if (!started || !g_state->join->Begin(*g_state->network, normalizedNick, "")) {
+    jint joinProfile = 0;
+    jclass activityClass = env->GetObjectClass(thiz);
+    jmethodID getProfile = env->GetMethodID(activityClass, "getNativeJoinProfile", "()I");
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (getProfile) joinProfile = env->CallIntMethod(thiz, getProfile);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); joinProfile = 0; }
+    env->DeleteLocalRef(activityClass);
+    if (joinProfile < 0 || joinProfile > 2) joinProfile = 0;
+    if (!started || !g_state->join->Begin(*g_state->network, normalizedNick, "", static_cast<WorldRPG::Net::JoinProfile>(joinProfile))) {
         g_state->network->StopNetwork();
         return JNI_FALSE;
     }
@@ -616,6 +640,42 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSurfaceChanged(
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeCancelIdentityRequest(JNIEnv* env, jobject thiz, jlong requestId) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || !g_state->join->CancelIdentityRequest(static_cast<uint64_t>(requestId))) return JNI_FALSE;
+    g_state->network->StopNetwork();
+    WorldRPG::ConnectionLoading::End();
+    return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeSetNetworkSerial(JNIEnv* env, jobject thiz, jstring serial) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || !serial || env->GetStringUTFLength(serial) != 32) return JNI_FALSE;
+    const char* value = env->GetStringUTFChars(serial, nullptr);
+    if (!value) return JNI_FALSE;
+    const bool ok = g_state->network->SetSerial(value);
+    env->ReleaseStringUTFChars(serial, value);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeProvideIdentityTicket(JNIEnv* env, jobject thiz, jlong requestId,
+        jstring ticket, jstring error) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || !ticket || !error) return;
+    if (env->GetStringUTFLength(ticket) > 4096 || env->GetStringUTFLength(error) > 512) return;
+    const char* ticketText = env->GetStringUTFChars(ticket, nullptr);
+    if (!ticketText) return;
+    const char* errorText = env->GetStringUTFChars(error, nullptr);
+    if (errorText) {
+        g_state->join->ProvideIdentityTicket(static_cast<uint64_t>(requestId), ticketText, errorText);
+        env->ReleaseStringUTFChars(error, errorText);
+    }
+    env->ReleaseStringUTFChars(ticket, ticketText);
+}
+
 JNIEXPORT void JNICALL
 Java_com_worldrpg_neonlauncher_game_GameActivity_nativeOnTouch(
     JNIEnv* env, jobject thiz, jfloat x, jfloat y, jint action, jint pointerId)
@@ -632,6 +692,13 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeOnTouch(
     event.action = static_cast<WorldRPG::Game::TouchAction>(action);
 
     g_state->input->onTouchEvent(event);
+}
+
+/// Activity window focus. Desktop CCore::IsFocused, sampled by CClientGame::OnWindowFocusChange.
+JNIEXPORT void JNICALL
+Java_com_worldrpg_neonlauncher_game_GameActivity_nativeWindowFocus(
+    JNIEnv*, jobject, jboolean focused) {
+    WorldRPG::Script::MtaWindowSetFocused(focused == JNI_TRUE);
 }
 
 /// Process incoming network packets on the view's GL thread.
@@ -757,7 +824,9 @@ Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeScriptInput(
 
 JNIEXPORT void JNICALL
 Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeSetScreenSize(
-    JNIEnv*, jobject, jint width, jint height) {
+    JNIEnv* env, jobject thiz, jint width, jint height) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || width <= 0 || height <= 0) return;
     WorldRPG::Script::ActiveVmSetScreen(width, height);
 }
 
@@ -775,8 +844,9 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeDestroy(JNIEnv* env, jobj
     g_hudRenderer = nullptr;
     g_enterServer = false;
     WorldRPG::ConnectionLoading::End();
-    // The Activity and its chat input bar are gone.
+    // The Activity and its chat input bar are gone. The window is no longer foreground.
     WorldRPG::Script::MtaWindowSetChatInputActive(false);
+    WorldRPG::Script::MtaWindowSetFocused(false);
     g_state.reset();
     env->DeleteGlobalRef(g_gameActivityRef);
     g_gameActivityRef = nullptr;

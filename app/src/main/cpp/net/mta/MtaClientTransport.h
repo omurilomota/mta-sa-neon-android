@@ -33,6 +33,7 @@ public:
     bool isConnected() const;
     void shutdown();
     const char* lastError() const;
+    std::string remoteEndpoint() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> pImpl_;

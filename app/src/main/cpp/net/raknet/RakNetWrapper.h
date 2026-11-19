@@ -226,6 +226,7 @@ public:
 
     void SetClientPort(uint16_t port);
     std::string GetConnectedServer(bool includePort = false) const;
+    std::string GetPeerEndpoint() const;
 
     bool GetNetworkStatistics(NetworkStatistics& stats) const;
     // Snapshot of the 256 wire-id slots filled by SendPacket and DoPulse.
@@ -238,6 +239,7 @@ public:
     std::string GetLocalIP() const;
 
     void GetSerial(char* buffer, size_t maxLength) const;
+    bool SetSerial(const std::string& serial);
 
     uint8_t GetConnectionError() const;
     void SetConnectionError(uint8_t error);

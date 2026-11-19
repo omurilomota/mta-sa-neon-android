@@ -58,6 +58,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/CullZones.cpp"
     "${NATIVE_DIR}/shared/VehicleAudio.cpp"
     "${NATIVE_DIR}/shared/BreakEffects.cpp"
+    "${NATIVE_DIR}/shared/EngineModelLoader.cpp"
     "${NATIVE_DIR}/shared/EngineAssets.cpp"
     "${NATIVE_DIR}/shared/SampMapParser.cpp"
     "${NATIVE_DIR}/shared/LuaEngineApi.cpp"

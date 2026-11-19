@@ -15,6 +15,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.Toast;
+import com.worldrpg.neonlauncher.R;
 
 /**
  * In-game settings. The graphics, audio and some gameplay rows drive GTA SA mobile's own options table
@@ -29,6 +31,8 @@ public final class GameSettingsView extends FrameLayout {
         int[] get(int index);
         boolean set(int index, int value);
         void setChatShown(boolean shown);
+        int getInterfaceScalePercent();
+        boolean setInterfaceScalePercent(int percent);
         void onClose();
     }
 
@@ -101,6 +105,9 @@ public final class GameSettingsView extends FrameLayout {
         note.setText(live ? "Changes apply at once and are kept for the next sessions."
                 : "The game is still loading; the options appear once it is running.");
 
+        section(getContext().getString(R.string.section_interface));
+        interfaceScale();
+
         section("Graphics");
         choice("Visual quality", QUALITY, new String[] {"Low", "Medium", "High", "Very high"});
         slider("Resolution", RESOLUTION, "%");
@@ -136,6 +143,48 @@ public final class GameSettingsView extends FrameLayout {
 
     private void store(int index, int value) {
         if (host.set(index, value)) prefs.edit().putInt("gta_" + index, value).apply();
+    }
+
+    private void interfaceScale() {
+        TextView description = new TextView(getContext());
+        description.setText(R.string.interface_scale_description);
+        description.setTextColor(0xFFB7C3CE);
+        description.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        list.addView(description);
+
+        LinearLayout box = new LinearLayout(getContext());
+        box.setGravity(Gravity.CENTER_VERTICAL);
+        SeekBar bar = new SeekBar(getContext());
+        bar.setContentDescription(getContext().getString(R.string.interface_scale));
+        bar.setMax((InterfaceScale.MAX_PERCENT - InterfaceScale.MIN_PERCENT) / InterfaceScale.STEP_PERCENT);
+        bar.setProgress((host.getInterfaceScalePercent() - InterfaceScale.MIN_PERCENT) / InterfaceScale.STEP_PERCENT);
+        TextView value = new TextView(getContext());
+        value.setTextColor(Color.WHITE);
+        value.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        value.setText(host.getInterfaceScalePercent() + "%");
+        Runnable apply = () -> {
+            int percent = InterfaceScale.MIN_PERCENT + bar.getProgress() * InterfaceScale.STEP_PERCENT;
+            if (!host.setInterfaceScalePercent(percent)) {
+                Toast.makeText(getContext(), R.string.interface_scale_save_failed, Toast.LENGTH_SHORT).show();
+                bar.setProgress((host.getInterfaceScalePercent() - InterfaceScale.MIN_PERCENT) / InterfaceScale.STEP_PERCENT);
+            }
+        };
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                value.setText((InterfaceScale.MIN_PERCENT + progress * InterfaceScale.STEP_PERCENT) + "%");
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { apply.run(); }
+        });
+        box.addView(bar, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        box.addView(value, new LinearLayout.LayoutParams(dp(56), LayoutParams.WRAP_CONTENT));
+        Button reset = flatButton(getContext().getString(R.string.interface_scale_default), 0xFF243140, 0xFF31435A);
+        reset.setOnClickListener(v -> {
+            bar.setProgress((InterfaceScale.DEFAULT_PERCENT - InterfaceScale.MIN_PERCENT) / InterfaceScale.STEP_PERCENT);
+            apply.run();
+        });
+        box.addView(reset, new LinearLayout.LayoutParams(dp(80), dp(48)));
+        row(getContext().getString(R.string.interface_scale), box);
     }
 
     private void section(String label) {

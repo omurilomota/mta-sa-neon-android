@@ -602,6 +602,12 @@ void SetResourceCacheRoot(const std::string& root) {
     state.rootWarned = false;
 }
 
+std::string GetResourceCacheRoot() {
+    State& state = GetState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.cacheRoot;
+}
+
 void SetServerBase(const std::string& baseUrl) {
     State& state = GetState();
     std::lock_guard<std::mutex> lock(state.mutex);

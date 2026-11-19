@@ -39,13 +39,23 @@ class FavoritesFragment : Fragment() {
         binding.favoritesList.layoutManager =
             GridLayoutManager(context, ServerBrowserFragment.columnCount(resources.configuration.screenWidthDp))
         binding.favoritesList.adapter = serverAdapter
+        childFragmentManager.setFragmentResultListener(AddFavoriteDialog.RESULT_KEY, viewLifecycleOwner) { _, _ ->
+            loadFavorites()
+        }
+        binding.btnAddFavorite.setOnClickListener {
+            if (childFragmentManager.findFragmentByTag(AddFavoriteDialog.TAG) == null) {
+                AddFavoriteDialog().show(childFragmentManager, AddFavoriteDialog.TAG)
+            }
+        }
     }
 
     /** Lists the favorites and queries each one live. */
     private fun loadFavorites() {
         queries.forEach { it.cancel() }
         queries.clear()
-        val keys = prefsManager.getFavorites().sorted()
+        val keys = prefsManager.getFavorites().filter {
+            com.worldrpg.neonlauncher.network.ServerAddress.fromKey(it) != null
+        }.sorted()
         binding.emptyState.visibility = if (keys.isEmpty()) View.VISIBLE else View.GONE
         binding.favoritesList.visibility = if (keys.isEmpty()) View.GONE else View.VISIBLE
         servers = keys.map { ServerInfo.fromFavoriteKey(it) }
@@ -74,6 +84,8 @@ class FavoritesFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        queries.forEach { it.cancel() }
+        queries.clear()
         super.onDestroyView()
         _binding = null
     }

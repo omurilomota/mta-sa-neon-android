@@ -23,7 +23,7 @@ void PedAdd(uint32_t id) {
     Net::BitStreamWriter w;
     w.WriteCompressed(1,4);
     Bits(w,id,17); w.Write(uint8_t(14)); Bits(w,0,17); w.Write(uint8_t(0)); w.WriteCompressed(0,2);
-    Bits(w,0,1); Bits(w,1,1); w.WriteCompressed(0,2); w.WriteCompressed(0,2); w.Write(uint8_t(0));
+    Bits(w,0,1); Bits(w,1,1); w.WriteCompressed(0,2); w.WriteCompressed(0,2);
     Bits(w,100*1024,24); Bits(w,50*1024,24); w.Write(12.f); w.WriteCompressed(61,2);
     Bits(w,32768,16); w.Write(uint8_t(100)); w.Write(uint8_t(0)); Bits(w,0,1);
     Bits(w,0,1); Bits(w,0,1); Bits(w,0,1); Bits(w,0,1);

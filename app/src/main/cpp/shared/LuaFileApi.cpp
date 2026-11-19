@@ -1,6 +1,7 @@
 #include "LuaFileApi.h"
 
 #include "LuaVMStub.h"
+#include "net/HttpDownloader.h"
 
 #include "lua.hpp"
 
@@ -34,6 +35,19 @@ fs::path Root() {
 #endif
 }
 
+fs::path CacheRoot() {
+    std::string root = WorldRPG::Net::HttpDownloader::GetResourceCacheRoot();
+    if (!root.empty()) return fs::path(root);
+#if defined(__ANDROID__)
+    std::error_code ec;
+    fs::path p1("/data/user/0/com.worldrpg.neonlauncher/files/mta_resource_cache");
+    if (fs::exists(p1, ec)) return p1;
+    return fs::path("/data/data/com.worldrpg.neonlauncher/files/mta_resource_cache");
+#else
+    return fs::path("/tmp/neon-dx-cache");
+#endif
+}
+
 bool HasParentSegment(const std::string& raw) {
     size_t start = 0;
     while (start <= raw.size()) {
@@ -46,25 +60,78 @@ bool HasParentSegment(const std::string& raw) {
     return false;
 }
 
-bool Resolve(const char* text, fs::path& out) {
-    if (!text || text[0] == '\0' || text[0] == '/' || text[0] == '\\') return false;
-    const std::string raw(text);
-    // A name such as "a..b" is a file name. Only a ".." path segment leaves the sandbox.
-    if (HasParentSegment(raw)) return false;
-    std::error_code error;
-    fs::create_directories(Root(), error);
-    const fs::path full = fs::weakly_canonical(Root() / raw, error);
-    if (error) {
-        const fs::path parent = (Root() / raw).parent_path();
-        fs::create_directories(parent, error);
-        out = Root() / raw;
-    } else {
-        out = full;
+} // namespace
+
+bool ResolveFilePath(const char* text, std::filesystem::path& out) {
+    if (!text || text[0] == '\0') return false;
+    std::string raw(text);
+    for (char& c : raw) {
+        if (c == '\\') c = '/';
     }
-    const fs::path root = fs::weakly_canonical(Root(), error);
-    const std::string rootText = root.string();
-    const std::string fullText = out.string();
-    return fullText.compare(0, rootText.size(), rootText) == 0;
+    if (HasParentSegment(raw)) return false;
+    if (raw[0] == '/') return false;
+
+    std::error_code ec;
+    const fs::path cache = CacheRoot();
+
+    // 1. If starts with ':', format is :resource_name/subpath
+    if (raw[0] == ':') {
+        const size_t slash = raw.find('/');
+        if (slash != std::string::npos && slash > 1) {
+            const std::string resName = raw.substr(1, slash - 1);
+            const std::string subPath = raw.substr(slash + 1);
+            const fs::path candidate = cache / resName / subPath;
+            if (fs::is_regular_file(candidate, ec)) {
+                out = candidate;
+                return true;
+            }
+        }
+    }
+
+    // 2. Direct match in cache root: cache / raw
+    const fs::path directCandidate = cache / raw;
+    if (fs::is_regular_file(directCandidate, ec)) {
+        out = directCandidate;
+        return true;
+    }
+
+    // 3. Search in all subdirectories of cache root (any downloaded server resource folder)
+    if (fs::is_directory(cache, ec)) {
+        for (const auto& entry : fs::directory_iterator(cache, ec)) {
+            if (entry.is_directory(ec)) {
+                const fs::path subCandidate = entry.path() / raw;
+                if (fs::is_regular_file(subCandidate, ec)) {
+                    out = subCandidate;
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 4. Check Root() (files/lua)
+    const fs::path luaCandidate = Root() / raw;
+    if (fs::is_regular_file(luaCandidate, ec)) {
+        out = luaCandidate;
+        return true;
+    }
+
+    // 5. Check game_assets directory next to cache
+    const fs::path gameAssets = cache.parent_path() / "game_assets" / raw;
+    if (fs::is_regular_file(gameAssets, ec)) {
+        out = gameAssets;
+        return true;
+    }
+
+    // Fallback: Root() / raw (for creation or fallback)
+    fs::create_directories(Root(), ec);
+    out = Root() / raw;
+    return true;
+}
+
+namespace {
+
+bool Resolve(const char* text, fs::path& out) {
+    return ResolveFilePath(text, out);
 }
 
 OpenFile* FindFile(lua_State* L) {

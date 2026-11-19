@@ -49,6 +49,7 @@ struct Stats {
 // Android: call from the JNI join path before the first RESOURCE_START
 // (see the TODO(http-cache) in jni/JNI_OnLoad.cpp).
 void SetResourceCacheRoot(const std::string& root);
+std::string GetResourceCacheRoot();
 
 // Base URL of the HTTP file service, "http://host:port" (no trailing slash).
 // Empty disables downloads. Build it with BuildServerBase after SERVER_JOINEDGAME.

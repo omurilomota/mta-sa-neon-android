@@ -21,6 +21,11 @@ object JoinDialog {
         val ctx = fragment.requireContext()
         val prefs = PreferencesManager(ctx)
         val b = DialogJoinBinding.inflate(LayoutInflater.from(ctx))
+        val modes = ctx.resources.getStringArray(R.array.connection_modes)
+        var mode = com.worldrpg.neonlauncher.network.JoinProtocolSettings.read(ctx, server.ip, server.port)
+        b.connectionMode.setSimpleItems(modes)
+        b.connectionMode.setText(modes[mode], false)
+        b.connectionMode.setOnItemClickListener { _, _, position, _ -> mode = position }
 
         ServerLogo.bind(b.joinLogo, server.name, server.logoUrl)
         b.joinName.text = server.name
@@ -60,6 +65,10 @@ object JoinDialog {
                 return
             }
             prefs.username = nick
+            if (!com.worldrpg.neonlauncher.network.JoinProtocolSettings.save(ctx, server.ip, server.port, mode)) {
+                android.widget.Toast.makeText(ctx, "Unable to save connection mode.", android.widget.Toast.LENGTH_LONG).show()
+                return
+            }
             // Close the keyboard first: an open IME follows into the game window.
             b.editNickname.clearFocus()
             ctx.getSystemService(android.view.inputmethod.InputMethodManager::class.java)

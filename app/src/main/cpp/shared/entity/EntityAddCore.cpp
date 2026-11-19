@@ -210,15 +210,14 @@ bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
         return false;
     }
 
-    // Sync time context: one byte after the name. Read unconditionally. Device evidence (2026-11-12):
-    // the server writes it at the 0x0030 peer version too. Without it the DUMMY type name starts
-    // 8 bits early and the MARKER fields misalign. The reference gates it on ExtendedWorldPositions,
-    // so this is a deliberate deviation based on the bytes on the wire.
-    {
-        if (!reader.Read(out.syncTimeContext)) {
-            DIAG("ENTITY_ADD fail line=%d stage=synctime id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
-            return false;
-        }
+    // Sync time context: one byte after the name.
+    // In upstream MTA:SA server (CEntityAddPacket.cpp:217), syncTimeContext is gated on
+    // Can(eBitStreamVersion::ExtendedWorldPositions) (0x0031+).
+    // Peers at 0x0030 (standard mobile baseline) do not receive this byte.
+    out.syncTimeContext = 0;
+    if (kServerEntityBitStream >= 0x0031 && !reader.Read(out.syncTimeContext)) {
+        DIAG("ENTITY_ADD fail line=%d stage=synctime id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
+        return false;
     }
     DIAG("ENTITY_ADD common ok id=%u type=%u name=%s custom=%zu bit=%zu", id, static_cast<unsigned>(type), out.name.c_str(), out.customData.size(), reader.GetReadOffsetBits());
     return true;

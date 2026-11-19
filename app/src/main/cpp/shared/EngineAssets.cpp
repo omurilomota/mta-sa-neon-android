@@ -7,6 +7,8 @@
 // CLuaEngineDefs.cpp:2436-2544 and CSampMapParser.cpp.
 
 #include "EngineAssets.h"
+#include "EngineModelLoader.h"
+#include "LuaFileApi.h"
 
 #include "LuaVMStub.h"
 #include "ModelNames.h"
@@ -37,6 +39,20 @@ constexpr std::uint32_t kClothesModelFirst = 30000;
 constexpr std::uint32_t kClothesModelLast = 30151;
 constexpr std::uint32_t kClothesTexFirst = 30152;
 constexpr std::uint32_t kClothesTexLast = 30541;
+
+struct DffUserdata {
+    static constexpr std::uint32_t kMagic = 0x44464631;
+    std::uint32_t magic;
+    void* clump;
+    char path[256];
+};
+
+struct TxdUserdata {
+    static constexpr std::uint32_t kMagic = 0x54584431;
+    std::uint32_t magic;
+    void* txd;
+    char path[256];
+};
 
 const char* LuaTypeName(int type) {
     switch (type) {
@@ -270,8 +286,61 @@ int LoadAsset(lua_State* L, const char* function, const char* kind, bool (*raw)(
 }
 
 int LoadCOL(lua_State* L) { return LoadAsset(L, "engineLoadCOL", "COL", LooksCol); }
-int LoadDFF(lua_State* L) { return LoadAsset(L, "engineLoadDFF", "DFF", LooksDff); }
-int LoadTXD(lua_State* L) { return LoadAsset(L, "engineLoadTXD", "TXD", LooksTxd); }
+
+int LoadDFF(lua_State* L) {
+    std::string input;
+    std::string error;
+    if (!ReadScriptString(L, 1, "engineLoadDFF", input, error, false, "")) return FailFalse(L, error, true);
+    if (ActiveVmOwnerNet() == 0) return FailFalse(L, "", false);
+    if (input.size() > 32767)
+        return FailFalse(L, Usage("engineLoadDFF", "Error loading DFF", "Corrupt DFF file data or file path too long"), true);
+
+    std::filesystem::path resolved;
+    std::error_code ec;
+    if (ResolveFilePath(input.c_str(), resolved) && std::filesystem::is_regular_file(resolved, ec)) {
+        void* clump = NativeLoadDFF(resolved.string().c_str());
+        if (clump) {
+            auto* ud = static_cast<DffUserdata*>(lua_newuserdata(L, sizeof(DffUserdata)));
+            ud->magic = DffUserdata::kMagic;
+            ud->clump = clump;
+            std::strncpy(ud->path, resolved.string().c_str(), sizeof(ud->path) - 1);
+            ud->path[sizeof(ud->path) - 1] = '\0';
+            return 1;
+        }
+    }
+
+    LUA_LOGI("DIAG engineLoadDFF: resource file loading is not hooked");
+    return FailFalse(L, Usage("engineLoadDFF", "Bad file path", input), true);
+}
+
+int LoadTXD(lua_State* L) {
+    std::string input;
+    std::string error;
+    if (!ReadScriptString(L, 1, "engineLoadTXD", input, error, false, "")) return FailFalse(L, error, true);
+    if (lua_type(L, 2) == LUA_TBOOLEAN) {
+        // The filtering flag is accepted.
+    }
+    if (ActiveVmOwnerNet() == 0) return FailFalse(L, "", false);
+    if (input.size() > 32767)
+        return FailFalse(L, Usage("engineLoadTXD", "Error loading TXD", "Corrupt TXD file data or file path too long"), true);
+
+    std::filesystem::path resolved;
+    std::error_code ec;
+    if (ResolveFilePath(input.c_str(), resolved) && std::filesystem::is_regular_file(resolved, ec)) {
+        void* txd = NativeLoadTXD(resolved.string().c_str());
+        if (txd) {
+            auto* ud = static_cast<TxdUserdata*>(lua_newuserdata(L, sizeof(TxdUserdata)));
+            ud->magic = TxdUserdata::kMagic;
+            ud->txd = txd;
+            std::strncpy(ud->path, resolved.string().c_str(), sizeof(ud->path) - 1);
+            ud->path[sizeof(ud->path) - 1] = '\0';
+            return 1;
+        }
+    }
+
+    LUA_LOGI("DIAG engineLoadTXD: resource file loading is not hooked");
+    return FailFalse(L, Usage("engineLoadTXD", "Bad file path", input), true);
+}
 
 int LoadIFP(lua_State* L) {
     std::string input;
@@ -361,6 +430,13 @@ int ImportTxd(lua_State* L) {
     std::string error;
     if (!ReadScriptString(L, 2, "engineImportTXD", name, error, false, "")) return FailFalse(L, error, true);
     std::uint32_t id = 0;
+    auto* ud = static_cast<TxdUserdata*>(lua_touserdata(L, 1));
+    if (ud && ud->magic == TxdUserdata::kMagic && ud->txd && ResolveText(name, id)) {
+        if (NativeImportTXD(ud->txd, id)) {
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+    }
     if (!ResolveText(name, id) || id < kClothesTexFirst || id > kClothesTexLast)
         LUA_LOGE("Bad 'number' pointer @ 'engineImportTXD'(2)");
     else LUA_LOGI("DIAG engineImportTXD: texture import is not hooked");
@@ -378,6 +454,15 @@ int ReplaceModel(lua_State* L) {
     (void)alpha;
     std::uint32_t id = 0;
     if (!ResolveText(name, id)) return FailFalse(L, Usage("engineReplaceModel", "Bad usage", "Expected valid model ID or name at argument 2"), true);
+
+    auto* ud = static_cast<DffUserdata*>(lua_touserdata(L, 1));
+    if (ud && ud->magic == DffUserdata::kMagic && ud->clump) {
+        if (NativeReplaceModel(ud->clump, id)) {
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+    }
+
     LUA_LOGI("DIAG engineReplaceModel: DFF replacement is not hooked");
     return FailFalse(L, Usage("engineReplaceModel", "Bad usage", "Model ID " + std::to_string(id) + " replace failed"), true);
 }

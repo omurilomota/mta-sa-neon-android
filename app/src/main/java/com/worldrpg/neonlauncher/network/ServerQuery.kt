@@ -47,7 +47,9 @@ object ServerQuery {
     suspend fun query(host: String, gamePort: Int): Result? = withContext(Dispatchers.IO) {
         runCatching {
             val address = InetAddress.getByName(host)
-            val target = InetSocketAddress(address, gamePort + QUERY_PORT_OFFSET)
+            require(gamePort in 1..65535)
+            // Desktop GetQueryPort returns ushort, including wraparound at high game ports.
+            val target = InetSocketAddress(address, (gamePort + QUERY_PORT_OFFSET) and 0xFFFF)
             DatagramSocket().use { socket ->
                 val request = byteArrayOf('r'.code.toByte())
                 val buf = ByteArray(BUFFER)

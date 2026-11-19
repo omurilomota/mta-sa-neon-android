@@ -31,7 +31,7 @@ void Position(Net::BitStreamWriter& w,float x,float y,float z) {
 }
 void Header(Net::BitStreamWriter& w,uint32_t id) {
     w.WriteCompressed(1,4); Bits(w,id,17); w.Write(uint8_t(15)); Bits(w,0,17); w.Write(uint8_t(0)); w.WriteCompressed(0,2);
-    Bits(w,0,1); Bits(w,1,1); w.WriteCompressed(0,2); w.WriteCompressed(0,2); w.Write(uint8_t(0));
+    Bits(w,0,1); Bits(w,1,1); w.WriteCompressed(0,2); w.WriteCompressed(0,2);
 }
 void Shape(uint32_t id,unsigned type,bool enabled=true,bool autoEvents=true) {
     Net::BitStreamWriter w; Header(w,id); Bits(w,type,3); Position(w,100,100,10); Bits(w,enabled,1); Bits(w,autoEvents,1);
@@ -402,7 +402,7 @@ int main() {
     {
         Net::BitStreamWriter w;
         w.WriteCompressed(1,4); Bits(w,920,17); w.Write(uint8_t(13)); Bits(w,0,17); w.Write(uint8_t(0)); w.WriteCompressed(0,2);
-        Bits(w,0,1); Bits(w,1,1); w.WriteCompressed(0,2); w.WriteCompressed(0,2); w.Write(uint8_t(0));
+        Bits(w,0,1); Bits(w,1,1); w.WriteCompressed(0,2); w.WriteCompressed(0,2);
         w.WriteCompressed(5,2); for (char ch : {'A','l','p','h','a'}) w.Write(uint8_t(ch));
         w.Write(uint8_t(1)); w.Write(uint8_t(2)); w.Write(uint8_t(3)); Bits(w,1,1); w.Write(uint32_t(2));
         Bits(w,1,17); Bits(w,2,17);

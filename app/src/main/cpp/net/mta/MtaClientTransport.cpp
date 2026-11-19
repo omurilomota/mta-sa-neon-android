@@ -366,4 +366,5 @@ void ClientTransport::shutdown() {
     pImpl_->pending.clear(); pImpl_->events.clear(); pImpl_->cipher.reset(); pImpl_->prefix.clear();
 }
 const char* ClientTransport::lastError() const { return pImpl_->error.c_str(); }
+std::string ClientTransport::remoteEndpoint() const { return pImpl_->socket.Endpoint(); }
 } // namespace WorldRPG::Net::Mta

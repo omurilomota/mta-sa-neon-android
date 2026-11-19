@@ -123,6 +123,38 @@ public final class DxViewRegressionTest {
             for (int i = 0; i < 80; i++) lookup.invoke(null,"@font:" + (9200 + i) + ":" + pinnedFile,false);
             check(lookup.invoke(null,liveSource,false) != live);
         } finally { Files.deleteIfExists(pinnedFile); }
+        check(InterfaceScale.logicalSize(3120,3.75f,100)==832);
+        check(InterfaceScale.logicalSize(1440,3.75f,100)==384);
+        check(InterfaceScale.clampPercent(99)==100 && InterfaceScale.clampPercent(-1)==50);
+        check(InterfaceScale.clampPercent(900)==150);
+        check(InterfaceScale.logicalSize(1920,Float.NaN,100)==1920);
+        for(int percent=50;percent<=150;percent+=5) {
+            int logical=InterfaceScale.logicalSize(3120,3.75f,percent);
+            float cursor=InterfaceScale.toLogical(1560,3120,logical);
+            check(Math.abs(cursor/logical-0.5f)<0.00001f);
+        }
+        MtaDxView scaled=new MtaDxView(null);
+        Canvas scaledScreen=new Canvas();
+        Canvas.rectangles.clear();
+        scaled.setFrame("C\nV 832 384\nG 700 64 64 1 0\nR 0 0 8 8 4294967295\nG\nR 100 100 20 20 4294967295\nF 12 0 @gui:default-normal\nY 100 100 200 140 4294967295 0 0 0 gui\nF\nX 100 150 300 180 1 1 4294967295 0 0 0 0 0 0 0 0 0 0 dx\n");
+        scaled.onDraw(scaledScreen);
+        check(Canvas.rectangles.size()==2);
+        check(Canvas.rectangles.get(0).target && Canvas.rectangles.get(0).right==8f);
+        check(!Canvas.rectangles.get(1).target && Canvas.rectangles.get(1).right==450f);
+        check(scaledScreen.texts.get(0).size==45f && scaledScreen.texts.get(1).size==56.25f);
+        float[] touched=new float[3];
+        scaled.setCursorListener((action,x,y)->{touched[0]=action;touched[1]=x;touched[2]=y;});
+        android.view.MotionEvent touch=android.view.MotionEvent.obtain(0,0,0,1560,720,0);
+        check(scaled.onTouchEvent(touch));touch.recycle();
+        check(touched[0]==0 && touched[1]==416f && touched[2]==192f);
+        // Retained old offscreen work must not carry an old viewport into the latest frame.
+        scaled.setFrame("V 832 384\nG 701 64 64 1 0\nR 0 0 8 8 4294967295\nG\n");
+        scaled.setFrame("C\nV 1664 768\nX 0 0 100 30 1 1 4294967295 0 0 0 0 0 0 0 0 0 0 new\n");
+        Canvas latest=new Canvas();scaled.onDraw(latest);
+        check(latest.texts.get(0).size==28.125f);
+        touch=android.view.MotionEvent.obtain(0,0,1,1560,720,0);
+        scaled.onTouchEvent(touch);touch.recycle();
+        check(touched[0]==1 && touched[1]==832f && touched[2]==384f);
         System.out.println("DxViewRegressionTest: " + checks + " checks, 0 failures");
     }
 }

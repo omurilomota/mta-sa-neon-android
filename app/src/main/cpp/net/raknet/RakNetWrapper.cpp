@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "../mta/MtaClientTransport.h"
+#include "../mta/MtaRandom.h"
+#include "../NetJoinEnvelope.h"
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -631,6 +633,16 @@ bool RakNetWrapper::StartNetwork(const char* serverHost, uint16_t serverPort, bo
         return true;
     }
 
+    if (!pImpl_->serialBuffer[0]) {
+        std::array<uint8_t, 16> random{};
+        if (!Mta::RandomBytes(random)) return false;
+        constexpr char hex[] = "0123456789ABCDEF";
+        for (size_t i=0; i<random.size(); ++i) {
+            pImpl_->serialBuffer[i*2] = hex[random[i] >> 4];
+            pImpl_->serialBuffer[i*2+1] = hex[random[i] & 15];
+        }
+        pImpl_->serialBuffer[32] = '\0';
+    }
     if (!pImpl_->adapter.startup(1, 1)) {
         LOGE("RakNetWrapper: adapter startup failed");
         return false;
@@ -828,7 +840,12 @@ bool RakNetWrapper::SendPacket(uint8_t packetId, const BitStreamWriter& stream,
     size_t bits = stream.GetBitLength();
     if (packetId == static_cast<uint8_t>(PacketID::USER_PACKET_ENUM)) {
         if (bits < 8 || stream.GetData()[0] > 156) return false;
-        sendBuf.assign(stream.GetData(),stream.GetData()+dataLen);
+        if (stream.GetData()[0] == 4) {
+            BitStreamWriter envelope;
+            if (!BuildNetJoinEnvelope(stream,pImpl_->serialBuffer,envelope)) return false;
+            sendBuf.assign(envelope.GetData(),envelope.GetData()+envelope.GetByteLength());
+            bits = envelope.GetBitLength();
+        } else sendBuf.assign(stream.GetData(),stream.GetData()+dataLen);
         sendBuf[0] += packetId;
     } else {
         sendBuf.push_back(packetId);
@@ -854,6 +871,10 @@ std::string RakNetWrapper::GetConnectedServer(bool includePort) const {
         return pImpl_->serverHost + ":" + std::to_string(pImpl_->serverPort);
     }
     return pImpl_->serverHost;
+}
+
+std::string RakNetWrapper::GetPeerEndpoint() const {
+    return pImpl_->adapter.remoteEndpoint();
 }
 
 bool RakNetWrapper::GetNetworkStatistics(NetworkStatistics& stats) const {
@@ -909,6 +930,13 @@ void RakNetWrapper::GetSerial(char* buffer, size_t maxLength) const {
     size_t copyLen = std::min(maxLength - 1, strlen(pImpl_->serialBuffer));
     memcpy(buffer, pImpl_->serialBuffer, copyLen);
     buffer[copyLen] = '\0';
+}
+
+bool RakNetWrapper::SetSerial(const std::string& serial) {
+    if (pImpl_->running.load() || serial.size() != 32) return false;
+    for (const char c : serial) if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) return false;
+    std::memcpy(pImpl_->serialBuffer,serial.c_str(),33);
+    return true;
 }
 
 uint8_t RakNetWrapper::GetConnectionError() const {

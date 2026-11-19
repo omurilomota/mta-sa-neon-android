@@ -12,6 +12,8 @@ data class ServerInfo(
     val ip: String,
     val port: Int,
     val isFavorite: Boolean = false,
+    /** Nonempty for entries from the official Neon catalogue. Its display name is authoritative. */
+    val registryId: String = "",
     /** http(s) URL of the server logo; empty shows the name's initials. */
     val logoUrl: String = "",
     val status: Status = Status.QUERYING,
@@ -33,7 +35,7 @@ data class ServerInfo(
         if (result == null) copy(status = Status.OFFLINE)
         else copy(
             // Desktop CServerListItem::ParseQuery takes the queried name when no master list restricts it.
-            name = result.serverName.ifBlank { name },
+            name = if (registryId.isNotEmpty()) name else result.serverName.ifBlank { name },
             status = Status.ONLINE,
             players = result.players,
             maxPlayers = result.maxPlayers,

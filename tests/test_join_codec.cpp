@@ -21,6 +21,7 @@
 #include <vector>
 #define private public
 #include "../app/src/main/cpp/net/NeonJoinProtocol.cpp"
+#include "../app/src/main/cpp/net/NetJoinEnvelope.h"
 #undef private
 
 #include <cstdio>
@@ -280,7 +281,7 @@ static void TestServerJoinedGameParse() {
     CHECK(impl.info.httpMaxConnections == 4, "http max connections parsed");
     CHECK(impl.info.httpDownloadType == 1 && impl.info.httpPort == 22005, "http port parsed");
     CHECK(impl.info.serverName == "WorldRPG Neon", "server name parsed");
-    CHECK(impl.info.lastError == "failed to send RPC INITIAL_DATA_STREAM",
+    CHECK(impl.state == JoinState::Failed && impl.info.lastError == DisconnectMessages::TransportFailure(DisconnectMessages::Transport::Other, false).text,
           "parse reached the RPC send step");
 }
 
@@ -298,7 +299,7 @@ static void TestModNameParse() {
     CHECK(impl.info.serverBitStreamVersion == NEON_BITSTREAM_VERSION, "server bitstream version parsed");
     CHECK(impl.info.authMode == NeonAuthMode::Disabled, "auth mode parsed");
     CHECK(impl.state == JoinState::Failed &&
-              impl.info.lastError == "failed to send PLAYER_JOINDATA",
+              impl.info.lastError == DisconnectMessages::TransportFailure(DisconnectMessages::Transport::Other, false).text,
           "MOD_NAME accepted; flow advanced to JOINDATA send");
 }
 
@@ -335,7 +336,7 @@ static void TestInGameNoticeIgnoresPureSync() {
 
     notice.ProcessGamePacket(static_cast<uint8_t>(NeonPacketID::SERVER_JOINEDGAME), body, sizeof(body), 8);
     CHECK(notice.State() == JoinState::Failed &&
-              notice.Info().lastError == "SERVER_JOINEDGAME truncated",
+              notice.Info().lastError == DisconnectMessages::ProtocolError(3).text,
           "packet 22 is still the packet that advances ingame-notice-sent");
 
     NeonJoinClient joining;
@@ -349,14 +350,14 @@ static void TestInGameNoticeIgnoresPureSync() {
     connecting.pImpl_->state = JoinState::WaitingModName;
     connecting.ProcessGamePacket(32, body, sizeof(body), 8);
     CHECK(connecting.State() == JoinState::Failed &&
-              connecting.Info().lastError.find("unexpected packet id 32") != std::string::npos,
+              connecting.Info().lastError == DisconnectMessages::ProtocolError(4).text,
           "pure sync before MOD_NAME still fails");
 
     NeonJoinClient listed;
     listed.pImpl_->state = JoinState::InGameNoticeSent;
     listed.ProcessGamePacket(25, body, sizeof(body), 8);
     CHECK(listed.State() == JoinState::Failed &&
-              listed.Info().lastError.find("unexpected packet id 25") != std::string::npos,
+              listed.Info().lastError == DisconnectMessages::ProtocolError(4).text,
           "PLAYER_LIST before STATUS_JOINED still fails");
 }
 
@@ -376,18 +377,118 @@ static void TestTransportFailureEndsAttempt() {
     join.Pulse();
     join.OnTransportFailure("Connection lost");
     join.ProcessGamePacket(static_cast<uint8_t>(NeonPacketID::SERVER_DISCONNECTED), nullptr, 0);
-    CHECK(failures == 1 && join.Info().lastError == "Connection attempt failed",
+    CHECK(failures == 1 && join.Info().lastError == DisconnectMessages::TransportFailure(DisconnectMessages::ClassifyTransport("Connection attempt failed"), false).text,
           "timeout and late packets preserve one terminal cause");
     CHECK(join.Begin(net, "Tester", ""), "retry starts a fresh attempt");
     join.OnTransportFailure("retry failure");
-    CHECK(failures == 2 && join.Info().lastError == "retry failure", "retry has its own failure");
+    CHECK(failures == 2 && join.Info().lastError == DisconnectMessages::TransportFailure(DisconnectMessages::Transport::Other, false).text, "retry has its own failure");
     CHECK(join.Begin(net, "Tester", ""), "begin session loss scenario");
     join.pImpl_->state = JoinState::Complete;
     join.OnTransportFailure("Connection lost");
-    CHECK(failures == 3 && join.Info().lastError == "Connection lost", "session loss still reaches UI");
+    CHECK(failures == 3 && join.Info().lastError == DisconnectMessages::TransportFailure(DisconnectMessages::ClassifyTransport("Connection lost"), true).text, "session loss still reaches UI");
+}
+
+static void TestNetworkJoinEnvelope() {
+    BitStreamWriter game, envelope;
+    const std::string serial = "0123456789ABCDEF0123456789ABCDEF";
+    CHECK(BuildJoinData(JoinProfile::Standard,"Tester","",std::string(1023,'T')+"Q",game), "standard game body with odd final signature byte");
+    CHECK(BuildNetJoinEnvelope(game,serial,envelope), "network join envelope");
+    // Independent bit-level reference; this header was accepted by unmodified
+    // ARM64 net.so on the Oracle test server on 2026-11-16 (no mobile adapter).
+    const std::string reference = "043000e0e3e5e9f1c1a161e0e39e908eb8da18f0f3f5f9e1d1b171f0f38e809ea8ca084000e5e6e0ecf4c4a464e5e69b958bbddf1df5f6f0fce4d4b474f5f68b859badcf0dc5c6c0ccd4e48444c5c6bbb5ab9dff3dd5d6d0dcc4f49454d5d6aba5bb8def2d021c0092f75018716f540000";
+    CHECK(ToHex(envelope.GetData(),113) == reference, "network header matches independent accepted vector");
+    CHECK(envelope.GetBitLength() == game.GetBitLength()+112*8, "body bit length retained");
+    CHECK(std::memcmp(envelope.GetData()+113,game.GetData()+1,game.GetByteLength()-1)==0,
+          "unaligned ticket/body bytes retained after network metadata");
+    BitStreamWriter invalid;
+    CHECK(!BuildNetJoinEnvelope(game,"bad",invalid), "invalid serial rejected");
+    BitStreamWriter legacy;
+    CHECK(BuildJoinData(JoinProfile::LegacyMobile,"Tester","","",legacy), "legacy body");
+    CHECK(!BuildNetJoinEnvelope(legacy,serial,invalid), "legacy is never wrapped as standard");
+    RakNetWrapper net;
+    CHECK(net.SetSerial(serial), "app-scoped serial accepted");
+    char actual[33]{};
+    net.GetSerial(actual,sizeof(actual));
+    CHECK(serial == actual && !net.SetSerial("invalid"), "serial retained and validated");
+}
+
+static void TestJoinProfilesAndData() {
+    CHECK(SelectJoinProfile("WORLD RP.G", 22003, JoinProfile::Automatic) == JoinProfile::Standard, "unknown host uses standard");
+    CHECK(SelectJoinProfile("WORLD RP.G", 22003, JoinProfile::LegacyMobile) == JoinProfile::LegacyMobile, "explicit legacy override");
+    CHECK(SelectJoinProfile("WorldRpgBrOficial.DuckDns.Org.", 22003, JoinProfile::Automatic) == JoinProfile::Standard, "known World RPG hostname uses standard");
+    CHECK(SelectJoinProfile("146.235.24.222", 22003, JoinProfile::Automatic) == JoinProfile::Standard, "known World RPG address uses standard");
+    CHECK(SelectJoinProfile("146.235.24.222", 22004, JoinProfile::Automatic) == JoinProfile::Standard, "port is part of profile");
+    CHECK(SelectJoinProfile("146.235.24.222", 22003, JoinProfile::Standard) == JoinProfile::Standard, "standard override wins");
+    for (const auto profile : {JoinProfile::Standard, JoinProfile::LegacyMobile}) {
+        BitStreamWriter packet;
+        const bool legacy = profile == JoinProfile::LegacyMobile;
+        const std::string ticket = legacy ? "" : std::string(1024, 'T');
+        CHECK(BuildJoinData(profile, "Tester", "secret", ticket, packet), "join data constructed");
+        if (legacy) {
+            CHECK(packet.GetByteLength() == 763 && packet.GetData()[0] == 19, "legacy retains captured envelope size/id");
+            CHECK(std::memcmp(packet.GetData() + 676, "1.6.0-", 6) == 0, "legacy marker offset retained");
+            for (size_t i = 1; i <= 667; ++i) CHECK(packet.GetData()[i] == 0, "legacy padding retained");
+        }
+        RefReader reader{packet.GetData(), static_cast<uint32_t>(packet.GetBitLength())};
+        uint32_t value = 0;
+        CHECK(reader.read(8, value) && value == (legacy ? 19u : 4u), "logical packet id");
+        if (legacy) CHECK(reader.skip(667*8), "skip legacy envelope");
+        CHECK(reader.read(16, value) && value == 0x41E6, "netcode");
+        CHECK(reader.read(16, value) && value == 0x0170, "MTA version");
+        CHECK(reader.read(16, value) && value == (legacy ? 0x3Du : 0x30u), "honest standard bitstream, captured legacy bitstream");
+        CHECK(reader.read(16, value) && value == 15, "version string length");
+        const std::string version = legacy ? "1.6.0-9.29999.0" : "1.7.0-9.29999.0";
+        for (const unsigned char c : version) CHECK(reader.read(8, value) && value == c, "version bytes");
+        CHECK(reader.read(1, value) && value == 0, "optional-update flag");
+        CHECK(reader.read(8, value) && value == 20, "game version");
+        for (size_t i=0; i<22; ++i) CHECK(reader.read(8, value) && value == (i < 6 ? static_cast<unsigned char>("Tester"[i]) : 0u), "fixed nickname bytes");
+        const unsigned char expectedMd5[16] = {0x5e,0xbe,0x22,0x94,0xec,0xd0,0xe0,0xf0,0x8e,0xab,0x76,0x90,0xd2,0xa6,0xee,0x69};
+        for (const auto byte : expectedMd5) CHECK(reader.read(8, value) && value == byte, "server password MD5 reference vector");
+        for (int i=0; i<32; ++i) CHECK(reader.read(8, value) && value == 0, "legacy community field");
+        if (!legacy) {
+            CHECK(reader.read(16, value) && value == ticket.size(), "unaligned trailing ticket prefix");
+            for (const unsigned char c : ticket) CHECK(reader.read(8, value) && value == c, "ticket preserved past old 256-byte limit");
+        }
+        CHECK(reader.offset() == packet.GetBitLength(), "all fields consumed without padding drift");
+    }
+    BitStreamWriter oversized, legacyAuth, invalid;
+    CHECK(!BuildJoinData(JoinProfile::Standard, "Tester", "", std::string(4097, 'T'), oversized), "oversized ticket rejected");
+    CHECK(!BuildJoinData(JoinProfile::LegacyMobile, "Tester", "", "ticket", legacyAuth), "legacy never truncates an auth ticket");
+    CHECK(!BuildJoinData(JoinProfile::Automatic, "Tester", "", "", invalid), "automatic must be resolved before serializing");
+}
+
+static void TestIdentityRequests() {
+    RakNetWrapper net;
+    NeonJoinClient join;
+    uint64_t requestId = 0;
+    join.SetIdentityCallback([&](uint64_t id, const std::string& server, const std::string&, NeonAuthMode mode) {
+        requestId = id;
+        CHECK(server == "server-id-123" && mode == NeonAuthMode::Required, "auth request bound to server and mode");
+    });
+    CHECK(join.Begin(net, "Tester", ""), "begin identity attempt");
+    RefWriter name;
+    name.append_field(0x3D,16);
+    name.append_string("deathmatch");
+    name.append_bits(2,8);
+    name.append_string("server-id-123");
+    join.pImpl_->HandleModName(name.data.data(), name.data.size());
+    CHECK(requestId != 0 && join.State() == JoinState::WaitingIdentity, "required login awaits asynchronous ticket");
+    CHECK(!join.ProvideIdentityTicket(requestId+1,"ticket",""), "stale response rejected");
+    CHECK(join.CancelIdentityRequest(requestId), "browser login cancels the pending handshake");
+    CHECK(join.State() == JoinState::Idle && !join.ProvideIdentityTicket(requestId,"ticket",""), "canceled request cannot continue");
+    CHECK(join.Begin(net,"Tester",""), "reconnect after browser login");
+    const uint64_t oldId = requestId;
+    join.pImpl_->HandleModName(name.data.data(), name.data.size());
+    CHECK(requestId != oldId, "new connection gets a fresh request id");
+    CHECK(!join.ProvideIdentityTicket(oldId,"ticket",""), "old ticket cannot authorize a new connection");
+    CHECK(join.ProvideIdentityTicket(requestId,"",""), "empty required ticket handled");
+    CHECK(join.State() == JoinState::Failed && join.Info().lastError.find("Sign in") != std::string::npos, "required auth never falls back to anonymous");
 }
 
 int main() {
+    TestNetworkJoinEnvelope();
+    TestJoinProfilesAndData();
+    TestIdentityRequests();
     TestU16LittleEndian();
     TestSingleBit();
     TestCompressedU32();

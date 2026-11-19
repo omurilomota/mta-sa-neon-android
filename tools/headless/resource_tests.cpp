@@ -11,6 +11,8 @@
 // Usage: neon_resource_tests [path/to/catalog.json]
 
 #include "HttpDownloader.h"
+#include <filesystem>
+#include <fstream>
 #include "LuaEventRegistry.h"
 #include "LuaKeyBindApi.h"
 #include "LuaGuiApi.h"
@@ -256,8 +258,7 @@ void WriteWeaponHeader(WorldRPG::Net::BitStreamWriter& w, uint32_t id, uint32_t 
         WriteTestBits(w, 0, 16); WriteTestBits(w, 16384, 16); WriteTestBits(w, 32768, 16);
     }
     WriteTestBits(w, 1, 1); // collisions (no callProp at 0x0030)
-    w.WriteCompressed(0u, 2); w.WriteCompressed(0u, 2); // custom count, name length
-    w.Write(static_cast<uint8_t>(0)); // mobile sync time context
+    w.WriteCompressed(0u, 2); w.WriteCompressed(0u, 2); // custom count, name length (no syncTimeContext at 0x0030)
 }
 
 void CheckWeaponSnapshots(WorldRPG::Script::LuaVMStub& vm) {
@@ -1414,6 +1415,10 @@ void CheckLowRiskLuaQueries(WorldRPG::Script::LuaVMStub& vm) {
 
 // Element, player, bit and vehicle helpers that do not need a GTA native.
 void CheckHelpers(WorldRPG::Script::LuaVMStub& vm) {
+    WorldRPG::Net::HttpDownloader::SetResourceCacheRoot("/tmp/neon-dx-cache");
+    std::filesystem::create_directories("/tmp/neon-dx-cache/worldrpg_cars/models");
+    std::ofstream("/tmp/neon-dx-cache/worldrpg_cars/models/testcar.txd") << "TXD";
+
     RunLua(vm, "helpers", R"LUA(
         local me = {id = 777, element = true}
         assert(isElement(me) == true, "local player is an element")
@@ -1582,6 +1587,8 @@ void CheckHelpers(WorldRPG::Script::LuaVMStub& vm) {
         assert(fileOpen("../secret") == false, "file sandbox")
         local dotted = fileCreate("a..b.txt")
         assert(type(dotted) == "number" and fileClose(dotted) == true and fileDelete("a..b.txt") == true, "dots in a file name")
+        assert(fileExists("models/testcar.txd") == true, "auto resource cache scan")
+        assert(fileExists(":worldrpg_cars/models/testcar.txd") == true, "colon resource prefix")
         local matrix = getElementMatrix(me)
         assert(type(matrix) == "table" and type(matrix[4][1]) == "number" and matrix[4][4] == 1, "matrix")
         assert(setHeatHaze(10) == true and getHeatHaze() == 10, "heat haze")

@@ -39,6 +39,7 @@ class GameActivity : AppCompatActivity() {
     private var serverIp: String = ""
     private var serverPort: Int = BuildConfig.DEFAULT_SERVER_PORT
     private var nativeInitialized = false // GL thread only
+    private var nativeLibraryLoaded = false
     @Volatile private var closing = false
     // True once the session reached Connected. A drop after that offers Retry / Quit (P3.1).
     private var joinedOnce = false
@@ -82,6 +83,9 @@ class GameActivity : AppCompatActivity() {
      * Process incoming network packets. Must be called every frame.
      */
     private external fun nativePulse()
+
+    /** Desktop CCore::IsFocused. Any thread; the VM applies it on the next pulse. */
+    private external fun nativeWindowFocus(focused: Boolean)
 
     /**
      * Releases the client state owned by this Activity.
@@ -217,6 +221,7 @@ class GameActivity : AppCompatActivity() {
         try {
 // libc++ is linked statically into WorldRPGNeon (c++_static); no shared runtime to preload.
             System.loadLibrary("WorldRPGNeon")
+            nativeLibraryLoaded = true
         } catch (error: UnsatisfiedLinkError) {
             android.util.Log.e("GameActivity", "Falha ao carregar WorldRPGNeon", error)
             Toast.makeText(this, "Falha ao carregar o cliente nativo.", Toast.LENGTH_LONG).show()
@@ -269,6 +274,8 @@ class GameActivity : AppCompatActivity() {
                 override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
                     if (closing || nativeInitialized) return
 
+                    // Sample before the VM is created so its constructor sees the real focus.
+                    nativeWindowFocus(hasWindowFocus())
                     if (!nativeInit()) {
                         connectionManager.setError("Falha ao iniciar o cliente nativo.")
                         return
@@ -391,6 +398,11 @@ class GameActivity : AppCompatActivity() {
                 for (pointer in pointers) nativeOnTouch(0f, 0f, MotionEvent.ACTION_CANCEL, pointer)
             }
         }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (nativeLibraryLoaded && !closing) nativeWindowFocus(hasFocus)
     }
 
     override fun onPause() {

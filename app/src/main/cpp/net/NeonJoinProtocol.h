@@ -7,6 +7,7 @@
 #include <string>
 
 #include "raknet/RakNetWrapper.h"
+#include "JoinDataCodec.h"
 
 namespace WorldRPG::Net {
 
@@ -68,7 +69,8 @@ enum class NeonServerRPC : uint8_t {
 constexpr uint16_t NEON_NETCODE_VERSION = 0x41E6;
 // version.h: MTA_DM_VERSION = (1 << 8) | (7 << 4) | 0
 constexpr uint16_t NEON_MTA_VERSION = 0x170;
-// bitstream.h: eBitStreamVersion::Latest (static_assert == 0x3D)
+// Server version in the original Neon capture. Android's peer layout stays
+// 0x0030 (JoinDataCodec); do not use this value to advertise unported features.
 constexpr uint16_t NEON_BITSTREAM_VERSION = 0x3D;
 // Client/sdk/game/CGame.h eGameVersion::VERSION_20. Provisional for the
 // mobile engine until a reference capture proves the value the mobile
@@ -89,6 +91,7 @@ enum class JoinState : uint8_t {
     Idle = 0,
     WaitingRakNet,        // transport connecting
     WaitingModName,       // NIC causes the server-side PLAYER_JOIN event
+    WaitingIdentity,      // asynchronous per-server Neon Identity ticket
     JoinDataSent,         // waiting SERVER_JOIN_COMPLETE
     ServerJoinComplete,   // waiting nothing; sends RPC PLAYER_INGAME_NOTICE
     InGameNoticeSent,     // waiting SERVER_JOINEDGAME
@@ -122,6 +125,7 @@ struct NeonJoinInfo {
     uint8_t disconnectType = 0xFF;  // raw 5-bit type from SERVER_DISCONNECTED
     std::string disconnectReason;
     std::string lastError;
+    JoinProfile joinProfile = JoinProfile::Standard;
 };
 
 /// Drives the MTA Neon join handshake on top of RakNetWrapper.
@@ -130,6 +134,8 @@ struct NeonJoinInfo {
 class NeonJoinClient {
 public:
     using StateCallback = std::function<void(JoinState state, const char* detail)>;
+    using IdentityCallback = std::function<void(uint64_t requestId, const std::string& serverId,
+                                               const std::string& endpoint, NeonAuthMode mode)>;
 
     NeonJoinClient();
     ~NeonJoinClient();
@@ -137,10 +143,12 @@ public:
     NeonJoinClient(const NeonJoinClient&) = delete;
     NeonJoinClient& operator=(const NeonJoinClient&) = delete;
 
-    /// Start the join sequence. Requires an empty password for now; a
-    /// password-protected server needs an MD5 implementation (tracked as a
-    /// follow-up) and Begin() refuses explicitly instead of sending zeros.
-    bool Begin(RakNetWrapper& net, const std::string& nickname, const std::string& password);
+    /// Automatic preserves known World RPG legacy endpoints; all others use packet 4.
+    bool Begin(RakNetWrapper& net, const std::string& nickname, const std::string& password,
+               JoinProfile profile = JoinProfile::Automatic);
+    void SetIdentityCallback(IdentityCallback callback);
+    bool ProvideIdentityTicket(uint64_t requestId, const std::string& ticket, const std::string& error);
+    bool CancelIdentityRequest(uint64_t requestId);
 
     /// Frame tick: fires pending sends once the transport is up and enforces
     /// per-state timeouts.

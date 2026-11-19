@@ -13,6 +13,9 @@ import com.worldrpg.neonlauncher.BuildConfig
 import com.worldrpg.neonlauncher.R
 import com.worldrpg.neonlauncher.databinding.FragmentSettingsBinding
 import com.worldrpg.neonlauncher.game.EngineHostActivity
+import com.worldrpg.neonlauncher.game.EngineDiagnostics
+import com.worldrpg.neonlauncher.game.InterfaceScale
+import com.worldrpg.neonlauncher.game.InterfaceScaleSettings
 import com.worldrpg.neonlauncher.utils.NativeAssetBridge
 import com.worldrpg.neonlauncher.utils.PreferencesManager
 import kotlinx.coroutines.launch
@@ -25,10 +28,10 @@ class SettingsFragment : Fragment() {
     private lateinit var prefsManager: PreferencesManager
     private lateinit var nativeAssetBridge: NativeAssetBridge
     private var syncingAssets = false
+    private var identityUi: NeonIdentityUi? = null
 
-    private val engineTest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val error = result.data?.getStringExtra(EngineHostActivity.EXTRA_BOOT_ERROR)
-        if (error != null) context?.let { Toast.makeText(it, error, Toast.LENGTH_LONG).show() }
+    private val engineTest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
+        // MainActivity presents stored failures, including native crashes with no Activity result.
         updateEngineTestButton()
     }
 
@@ -46,9 +49,37 @@ class SettingsFragment : Fragment() {
 
         prefsManager = PreferencesManager(requireContext())
         nativeAssetBridge = NativeAssetBridge(requireContext())
+        identityUi = NeonIdentityUi(requireActivity())
+        binding.btnNeonAccount.setOnClickListener {
+            val identity = identityUi ?: return@setOnClickListener
+            if (identity.isSignedIn()) {
+                com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(R.string.neon_account_sign_out)
+                    .setMessage("Sign out of your SA:O account on this device?")
+                    .setPositiveButton(R.string.neon_account_sign_out) { _, _ -> identity.signOut(); updateIdentity() }
+                    .setNegativeButton(android.R.string.cancel, null).show()
+            } else {
+                identity.signIn({ updateIdentity() }, { message ->
+                    context?.let { Toast.makeText(it, message, Toast.LENGTH_LONG).show() }
+                    updateIdentity()
+                })
+            }
+        }
+        updateIdentity()
 
         loadCurrentSettings()
+        binding.switchEngineDebug.isChecked = EngineDiagnostics.isEnabled(requireContext())
+        binding.switchEngineDebug.setOnCheckedChangeListener { button, enabled ->
+            if (enabled != EngineDiagnostics.isEnabled(requireContext()) &&
+                !EngineDiagnostics.setEnabled(requireContext(), enabled)) {
+                Toast.makeText(context, "Unable to save engine debug setting.", Toast.LENGTH_LONG).show()
+                button.isChecked = EngineDiagnostics.isEnabled(requireContext())
+            }
+        }
         setupValueLabels()
+        binding.btnResetInterfaceScale.setOnClickListener {
+            binding.sliderInterfaceScale.value = InterfaceScale.DEFAULT_PERCENT.toFloat()
+        }
         setupSaveButton()
         setupAssetSyncButton()
         setupEngineTestButton()
@@ -71,11 +102,16 @@ class SettingsFragment : Fragment() {
 
         // Touch Sensitivity
         binding.sliderTouchSensitivity.value = prefsManager.touchSensitivity.toFloat()
+        binding.sliderInterfaceScale.value = InterfaceScaleSettings.read(requireContext()).toFloat()
     }
 
     private fun setupValueLabels() {
         binding.volumeValue.text = "${binding.sliderVolume.value.toInt()}%"
         binding.touchValue.text = "${binding.sliderTouchSensitivity.value.toInt()}"
+        binding.interfaceScaleValue.text = "${binding.sliderInterfaceScale.value.toInt()}%"
+        binding.sliderInterfaceScale.addOnChangeListener { _, value, _ ->
+            binding.interfaceScaleValue.text = "${value.toInt()}%"
+        }
         binding.sliderVolume.addOnChangeListener { _, value, _ ->
             binding.volumeValue.text = "${value.toInt()}%"
         }
@@ -113,7 +149,7 @@ class SettingsFragment : Fragment() {
                             is NativeAssetBridge.DownloadState.Complete ->
                                 Toast.makeText(
                                     context,
-                                    "${state.fileCount} game files verified and ready",
+                                    "${state.fileCount} game data files verified",
                                     Toast.LENGTH_LONG
                                 ).show()
                             is NativeAssetBridge.DownloadState.Error ->
@@ -178,9 +214,15 @@ class SettingsFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         updateEngineTestButton()
+        updateIdentity()
+        _binding?.let { it.sliderInterfaceScale.value = InterfaceScaleSettings.read(requireContext()).toFloat() }
     }
 
     private fun saveSettings() {
+        if (!InterfaceScaleSettings.save(requireContext(), binding.sliderInterfaceScale.value.toInt())) {
+            Toast.makeText(context, R.string.interface_scale_save_failed, Toast.LENGTH_SHORT).show()
+            return
+        }
         // Save graphics quality
         prefsManager.graphicsQuality = when (binding.graphicsToggle.checkedButtonId) {
             R.id.btnGraphicsLow -> 0
@@ -198,7 +240,16 @@ class SettingsFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        identityUi?.close()
+        identityUi = null
         super.onDestroyView()
         _binding = null
+    }
+
+    private fun updateIdentity() {
+        val b = _binding ?: return
+        val connected = identityUi?.isSignedIn() == true
+        b.neonAccountStatus.setText(if (connected) R.string.neon_account_connected else R.string.neon_account_disconnected)
+        b.btnNeonAccount.setText(if (connected) R.string.neon_account_sign_out else R.string.neon_account_sign_in)
     }
 }
