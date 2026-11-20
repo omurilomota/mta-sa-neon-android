@@ -1088,6 +1088,7 @@ struct NeonJoinClient::Impl {
             const uint16_t port = colon == std::string::npos ? 0 : static_cast<uint16_t>(std::strtoul(endpoint.c_str() + colon + 1, nullptr, 10));
             info.joinProfile = SelectJoinProfile(net->GetConnectedServer(false), port, requestedProfile);
         }
+        WorldRPG::ServerWorld::SetCurrentWaterFlags(info.joinProfile == JoinProfile::Standard);
         JOIN_LOGI("NeonJoin: MOD_NAME mod=%s bs=0x%X auth=%u",
                   modName.c_str(), bsVersion, static_cast<unsigned>(info.authMode));
         if (info.authMode != NeonAuthMode::Disabled && identityCallback) {

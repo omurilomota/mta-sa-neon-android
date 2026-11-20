@@ -65,8 +65,6 @@ enum class NeonServerRPC : uint8_t {
     INITIAL_DATA_STREAM = 1,
 };
 
-// version.h: _NETCODE_VERSION 0x1E6 + (_NETCODE_VERSION_BRANCH_ID 0x4 << 12)
-constexpr uint16_t NEON_NETCODE_VERSION = 0x41E6;
 // version.h: MTA_DM_VERSION = (1 << 8) | (7 << 4) | 0
 constexpr uint16_t NEON_MTA_VERSION = 0x170;
 // Server version in the original Neon capture. Android's peer layout stays

@@ -7,6 +7,10 @@ A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft 
 
 ---
 
+## Neon server compatibility
+
+The standard connection uses Neon gameplay protocol `0x41E7` and the mobile bitstream layout `0x0030`. Use the server’s default gameplay protocol. For verified Android admission, the launcher must trust the server operator’s HTTPS issuer, and the issuer must authorize the APK’s package ID and signing certificate.
+
 ## Important Notice & Prerequisites
 
 > [!IMPORTANT]

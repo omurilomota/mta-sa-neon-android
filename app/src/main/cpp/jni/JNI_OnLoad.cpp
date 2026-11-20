@@ -81,7 +81,8 @@ void PostGameLine(int kind, const char* text) {
     } else if (result != JNI_OK) {
         return;
     }
-    jstring jtext = env->NewStringUTF(text);
+    const auto wide = Utf8::ToUtf16(text);
+    jstring jtext = env->NewString(reinterpret_cast<const jchar*>(wide.data()), static_cast<jsize>(wide.size()));
     if (jtext) {
         env->CallVoidMethod(g_gameActivityRef, g_onGameLineMethod, kind, jtext);
         if (env->ExceptionCheck()) env->ExceptionClear();

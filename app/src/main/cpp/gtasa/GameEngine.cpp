@@ -4504,7 +4504,7 @@ void ApplyServerSpawn(float x, float y, float z) {
     g_armor = 0.f;
     g_healthOwned = false;
     g_damagePending = false;
-    PlacePlayer();
+    g_localTeleportPending = true;
 }
 void CopySpawn(float& x, float& y, float& z) {
     x = g_spawnX.load();

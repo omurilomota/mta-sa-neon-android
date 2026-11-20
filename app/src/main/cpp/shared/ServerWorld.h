@@ -52,6 +52,7 @@ void NotePlayerNick(uint32_t id, const std::string& nick);
 // Case-insensitive nick match among players (CClientPlayerManager::Get, default insensitive).
 bool FindPlayerByNick(const std::string& nick, uint32_t& id);
 
+void SetCurrentWaterFlags(bool enabled);
 void OnEntityAdd(const uint8_t* body, size_t length, size_t bits);
 void OnEntityRemove(const uint8_t* body, size_t length, size_t bits);
 void OnCustomData(const uint8_t* body, size_t length, size_t bits);

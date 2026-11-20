@@ -14,6 +14,8 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <memory>
+#include <charconv>
 #include <string_view>
 #include <thread>
 #include <unordered_set>
@@ -209,6 +211,8 @@ public:
     HttpConnection(const HttpConnection&) = delete;
     HttpConnection& operator=(const HttpConnection&) = delete;
 
+    bool FullyConsumed() const { return pos_ == buffer_.size(); }
+
     bool Send(const std::string& data, std::string& error) {
         size_t offset = 0;
         while (offset < data.size()) {
@@ -314,25 +318,33 @@ bool ConnectTo(const HttpTarget& target, int& fd, std::string& error) {
     return fd >= 0;
 }
 
-// HTTP/1.0 GET. Streams the body into `path` (".part") and hashes it.
-// Returns false with `error` set; `status` is the HTTP status when headers arrived.
-bool FetchToFile(const HttpTarget& target, const std::string& requestPath, const std::string& path, FileHasher& hasher, int& status,
-                 std::string& error) {
+// A worker owns at most one idle connection to a resource origin.
+struct ResourceConnection {
+    std::string host, port;
+    std::unique_ptr<HttpConnection> idle;
+};
+
+bool FetchToFile(ResourceConnection& pool, const HttpTarget& target, const std::string& requestPath,
+                 const std::string& path, FileHasher& hasher, int& status, std::string& error) {
     status = 0;
-    int fd = -1;
-    if (!ConnectTo(target, fd, error)) return false;
-    HttpConnection conn(fd);
-
-    const std::string request = "GET " + requestPath + " HTTP/1.0\r\nHost: " + target.host + ":" + target.port +
-                                "\r\nUser-Agent: WorldRPG-Neon/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n";
-    if (!conn.Send(request, error)) return false;
-
+    const std::string request = "GET " + requestPath + " HTTP/1.1\r\nHost: " + target.host + ":" + target.port +
+                                "\r\nUser-Agent: MTAMobile/1.0\r\nAccept: */*\r\n\r\n";
+    std::unique_ptr<HttpConnection> socket = std::move(pool.idle);
     std::string line;
-    if (!conn.ReadLine(line, error)) return false;
-    if (line.rfind("HTTP/", 0) != 0) {
-        error = "bad status line";
-        return false;
+    // An idle connection may have expired. Retry this GET once on a fresh socket
+    // only if no response line was available. No file data has been accepted yet.
+    if (!socket || pool.host != target.host || pool.port != target.port ||
+        !socket->Send(request, error) || !socket->ReadLine(line, error)) {
+        socket.reset();
+        error.clear();
+        int fd = -1;
+        if (!ConnectTo(target, fd, error)) return false;
+        socket = std::make_unique<HttpConnection>(fd);
+        if (!socket->Send(request, error) || !socket->ReadLine(line, error)) return false;
     }
+    HttpConnection& conn = *socket;
+    bool reusable = line.rfind("HTTP/1.1 ", 0) == 0;
+    if (line.rfind("HTTP/", 0) != 0) { error = "bad status line"; return false; }
     const size_t space = line.find(' ');
     if (space == std::string::npos) {
         error = "bad status line";
@@ -357,8 +369,20 @@ bool FetchToFile(const HttpTarget& target, const std::string& requestPath, const
         const size_t first = value.find_first_not_of(" \t");
         value = first == std::string::npos ? std::string() : value.substr(first);
         if (name == "content-length") {
-            contentLength = std::atoll(value.c_str());
+            long long parsedLength = -1;
+            const auto end = value.data() + value.size();
+            const auto parsed = std::from_chars(value.data(), end, parsedLength);
+            if (parsed.ec != std::errc{} || parsed.ptr != end || parsedLength < 0 ||
+                (contentLength >= 0 && parsedLength != contentLength)) {
+                error = "invalid Content-Length";
+                return false;
+            }
+            contentLength = parsedLength;
+        } else if (name == "connection") {
+            for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (value.find("close") != std::string::npos) reusable = false;
         } else if (name == "transfer-encoding") {
+            reusable = false;
             std::string lower = value;
             for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             chunked = lower.find("chunked") != std::string::npos;
@@ -367,7 +391,7 @@ bool FetchToFile(const HttpTarget& target, const std::string& requestPath, const
         }
     }
     if (status != 200) {
-        error = "HTTP status" + (location.empty() ? std::string() : " (Location: " + location + ")");
+        error = "HTTP " + std::to_string(status) + (location.empty() ? std::string() : " (Location: " + location + ")");
         return false;
     }
 
@@ -455,10 +479,15 @@ bool FetchToFile(const HttpTarget& target, const std::string& requestPath, const
         error = "close failed";
         ok = false;
     }
+    if (ok && reusable && contentLength >= 0 && conn.FullyConsumed()) {
+        pool.host = target.host;
+        pool.port = target.port;
+        pool.idle = std::move(socket);
+    }
     return ok;
 }
 
-Outcome ProcessRequest(const Request& req) {
+Outcome ProcessRequest(ResourceConnection& pool, const Request& req) {
     Outcome out;
     const std::string label = req.resource + "/" + req.file;
     const std::string finalPath = req.cacheRoot + "/" + req.resource + "/" + req.file;
@@ -493,7 +522,7 @@ Outcome ProcessRequest(const Request& req) {
 
     FileHasher hasher;
     int status = 0;
-    if (!FetchToFile(target, requestPath, partPath, hasher, status, error)) {
+    if (!FetchToFile(pool, target, requestPath, partPath, hasher, status, error)) {
         std::remove(partPath.c_str());
         out.note = label + ": " + error;
         return out;  // Kind::Failed (default)
@@ -569,6 +598,7 @@ void ApplyOutcome(Stats& stats, Outcome& outcome, const Request& req) {
 }
 
 void WorkerLoop() {
+    ResourceConnection pool;
     State& state = GetState();
     while (true) {
         Request req;
@@ -581,7 +611,7 @@ void WorkerLoop() {
             ++state.active;
         }
 
-        Outcome outcome = ProcessRequest(req);
+        Outcome outcome = ProcessRequest(pool, req);
 
         std::lock_guard<std::mutex> lock(state.mutex);
         ApplyOutcome(state.stats, outcome, req);
