@@ -2,10 +2,10 @@
 
 Timers, event handling, network latent transfers, file I/O, XML parsing, JSON serialization, UTF strings, and cryptography.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 195
-- **Implemented:** 195 (100.0%)
+- **Nonconstant handlers:** 195 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 
@@ -36,7 +36,7 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 | `bitReplace` | **Implemented** | `CLuaBitDefs.cpp:22` | `bitReplace` | Operational on Android. (BitReplace) |
 | `bitTest` | **Implemented** | `CLuaBitDefs.cpp:18` | `bitTest` | Operational on Android. (BitTest) |
 | `bitXor` | **Implemented** | `CLuaBitDefs.cpp:18` | `bitXor` | Operational on Android. (BitXor) |
-| `call` | **Implemented** | `CLuaResourceDefs.cpp:20` | `Call` | Operational on Android. (l_call) |
+| `call` | **Implemented** | `CLuaResourceDefs.cpp:20` | `Call` | Resolves the function in the target resource environment, requires a declared export, and runs it with the target owner and caller source fields. |
 | `cancelEvent` | **Implemented** | `CLuaManager.cpp:169` | `CLuaFunctionDefs::CancelEvent` | Operational on Android. (l_cancelEvent) |
 | `cancelLatentEvent` | **Implemented** | `CLuaManager.cpp:174` | `CLuaFunctionDefs::CancelLatentEvent` | Operational on Android. (l_cancelLatentEvent) |
 | `clearChatBox` | **Implemented** | `CLuaManager.cpp:182` | `CLuaFunctionDefs::ClearChatBox` | Operational on Android. (ClearChatBox) |
@@ -45,7 +45,7 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 | `debugSleep` | **Implemented** | `CLuaUtilDefs.cpp:70` | `DebugSleep` | Follows CLuaUtilDefs.cpp:611-648. A bad number returns false. Outside development mode it logs an error and returns false. In development mode it delivers finished fetchRemote calls, then sleeps. Host-tested. |
 | `decodeString` | **Implemented** | `CLuaCryptDefs.cpp:33` | `DecodeString` | Operational on Android. (DecodeString) |
 | `deref` | **Implemented** | `CLuaUtilDefs.cpp:44` | `Dereference` | Operational on Android. (l_deref) |
-| `dofile` | **Implemented** | `CLuaMain.cpp:86` | `CLuaUtilDefs::DisabledFunction` | Operational on Android. (l_unsafe) |
+| `dofile` | **Implemented** | `CLuaMain.cpp:86` | `CLuaUtilDefs::DisabledFunction` | Disabled in the client. Returns false. |
 | `downloadFile` | **Implemented** | `CLuaManager.cpp:206` | `CLuaFunctionDefs::DownloadFile` | Operational on Android. (l_downloadFile) |
 | `encodeString` | **Implemented** | `CLuaCryptDefs.cpp:32` | `EncodeString` | Operational on Android. (EncodeString) |
 | `executeCommandHandler` | **Implemented** | `CLuaManager.cpp:227` | `CLuaFunctionDefs::ExecuteCommandHandler` | Operational on Android. (l_executeCommandHandler) |
@@ -118,7 +118,7 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 | `getUserdataType` | **Implemented** | `CLuaUtilDefs.cpp:50` | `GetUserdataType` | Operational on Android. (l_getUserdataType) |
 | `getValidPedModels` | **Implemented** | `CLuaManager.cpp:205` | `CLuaFunctionDefs::GetValidPedModels` | Stock models only (0..312 excluding 74, 149, 208); custom allocation is not ported. Host-tested; not device-verified. (GetValidPedModels) |
 | `getVersion` | **Implemented** | `CLuaManager.cpp:240` | `CLuaFunctionDefs::GetVersion` | Operational on Android. (l_getVersion) |
-| `getfenv` | **Implemented** | `CLuaMain.cpp:90` | `CLuaUtilDefs::DisabledFunction` | Operational on Android. (l_unsafe) |
+| `getfenv` | **Implemented** | `CLuaMain.cpp:90` | `CLuaUtilDefs::DisabledFunction` | Disabled in the client. Returns false. |
 | `gettok` | **Implemented** | `CLuaUtilDefs.cpp:73` | `GetTok` | Operational on Android. (l_gettok) |
 | `hash` | **Implemented** | `CLuaCryptDefs.cpp:24` | `ArgumentParserWarn<false, Hash>` | Operational on Android. (l_hash) |
 | `interpolateBetween` | **Implemented** | `CLuaUtilDefs.cpp:58` | `InterpolateBetween` | Operational on Android. (l_interpolateBetween) |
@@ -136,12 +136,12 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 | `isTrayNotificationEnabled` | **Implemented** | `CLuaManager.cpp:186` | `CLuaFunctionDefs::IsTrayNotificationEnabled` | setWindowFlashing follows CStaticFunctionDefinitions.cpp:308-323. A focused window or a disabled server_can_flash_window cvar returns false. FlashWindowEx is not hooked, so an allowed call returns true and does not flash. createTrayNotification follows CStaticFunctionDefinitions.cpp:325-333 and CTrayIcon.cpp:101-137. allow_tray_notifications defaults to true. Shell_NotifyIcon is not hooked, so the call returns false. Host-tested. Not device-verified. |
 | `isVoiceEnabled` | **Implemented** | `CLuaManager.cpp:247` | `CLuaFunctionDefs::IsVoiceEnabled` | Operational on Android. (l_isVoiceEnabled) |
 | `killTimer` | **Implemented** | `CLuaTimerDefs.cpp:19` | `KillTimer` | Operational on Android. (l_killTimer) |
-| `load` | **Implemented** | `CLuaResourceDefs.cpp:32` | `Load` | Operational on Android. (l_load) |
-| `loadfile` | **Implemented** | `CLuaMain.cpp:87` | `CLuaUtilDefs::DisabledFunction` | Operational on Android. (l_unsafe) |
-| `loadlib` | **Implemented** | `CLuaMain.cpp:89` | `CLuaUtilDefs::DisabledFunction` | Operational on Android. (l_unsafe) |
-| `loadstring` | **Implemented** | `CLuaResourceDefs.cpp:31` | `LoadString` | Operational on Android. (l_loadstring) |
+| `load` | **Implemented** | `CLuaResourceDefs.cpp:32` | `Load` | Compiles Lua source text. Binary chunks are rejected. |
+| `loadfile` | **Implemented** | `CLuaMain.cpp:87` | `CLuaUtilDefs::DisabledFunction` | Disabled in the client. Returns false. |
+| `loadlib` | **Implemented** | `CLuaMain.cpp:89` | `CLuaUtilDefs::DisabledFunction` | Disabled in the client. Returns false. |
+| `loadstring` | **Implemented** | `CLuaResourceDefs.cpp:31` | `LoadString` | Compiles Lua source text. Binary chunks are rejected. |
 | `md5` | **Implemented** | `CLuaCryptDefs.cpp:22` | `ArgumentParserWarn<false, Md5>` | Operational on Android. (l_md5) |
-| `newproxy` | **Implemented** | `CLuaMain.cpp:91` | `CLuaUtilDefs::DisabledFunction` | Operational on Android. (l_unsafe) |
+| `newproxy` | **Implemented** | `CLuaMain.cpp:91` | `CLuaUtilDefs::DisabledFunction` | Disabled in the client. Returns false. |
 | `outputChatBox` | **Implemented** | `CLuaManager.cpp:178` | `CLuaFunctionDefs::OutputChatBox` | Operational on Android. (OutputChatBox) |
 | `outputConsole` | **Implemented** | `CLuaManager.cpp:177` | `CLuaFunctionDefs::OutputConsole` | Operational on Android. (l_outputConsole) |
 | `outputDebugString` | **Implemented** | `CLuaManager.cpp:179` | `CLuaFunctionDefs::OutputClientDebugString` | Operational on Android. (l_debug) |
@@ -159,7 +159,7 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 | `removeCommandHandler` | **Implemented** | `CLuaManager.cpp:226` | `CLuaFunctionDefs::RemoveCommandHandler` | Operational on Android. (l_removeCommandHandler) |
 | `removeDebugHook` | **Implemented** | `CLuaManager.cpp:237` | `CLuaFunctionDefs::RemoveDebugHook` | Operational on Android. (l_removeDebugHook) |
 | `removeEventHandler` | **Implemented** | `CLuaManager.cpp:165` | `CLuaFunctionDefs::RemoveEventHandler` | Operational on Android. (l_removeEventHandler) |
-| `require` | **Implemented** | `CLuaMain.cpp:88` | `CLuaUtilDefs::DisabledFunction` | Operational on Android. (l_unsafe) |
+| `require` | **Implemented** | `CLuaMain.cpp:88` | `CLuaUtilDefs::DisabledFunction` | Disabled in the client. Returns false. |
 | `resetNeonClientSettings` | **Implemented** | `CLuaClientDefs.cpp:30` | `ArgumentParser<ResetNeonClientSettings>` | Operational on Android. (l_resetNeonClientSettings) |
 | `resetTimer` | **Implemented** | `CLuaTimerDefs.cpp:20` | `ResetTimer` | Operational on Android. (l_resetTimer) |
 | `setAnalogControlState` | **Implemented** | `CLuaManager.cpp:213` | `CLuaFunctionDefs::SetAnalogControlState` | Operational on Android. (SetAnalogControlState) |

@@ -23,6 +23,7 @@ namespace WorldRPG::Script {
 namespace {
 
 constexpr const char* kResourceTable = "worldrpg.resources";
+char kResourceEnvironments;
 
 void PushResource(lua_State* L, const ResourceLoader::ResourceView& view) {
     // One table per net id and start, so getThisResource() == getResourceFromName(name)
@@ -238,84 +239,63 @@ int l_call(lua_State* L) {
         PushFail(L);
         return 1;
     }
-    const char* funcName = lua_tostring(L, 2);
-    if (!funcName || funcName[0] == '\0') {
+    size_t length = 0;
+    const char* text = lua_tolstring(L, 2, &length);
+    const std::string funcName(text, length);
+    if (std::find(view.exports.begin(), view.exports.end(), funcName) == view.exports.end()) {
         PushFail(L);
         return 1;
     }
-    lua_getglobal(L, "sourceResource");
-    const int oldSourceRes = luaL_ref(L, LUA_REGISTRYINDEX);
-    lua_getglobal(L, "sourceResourceRoot");
-    const int oldSourceRoot = luaL_ref(L, LUA_REGISTRYINDEX);
 
-    ResourceLoader::ResourceView caller;
-    if (ResourceLoader::CopyCallerResource(ActiveVmOwnerNet(), ActiveVmOwnerGeneration(), ActiveVmOwner(), caller)) {
-        PushResource(L, caller);
-        lua_setglobal(L, "sourceResource");
-        if (caller.root != 0) PushElement(L, caller.root);
-        else lua_pushnil(L);
-        lua_setglobal(L, "sourceResourceRoot");
-    }
-
-    bool foundFunc = false;
-    lua_getglobal(L, "exports");
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &kResourceEnvironments);
     if (lua_istable(L, -1)) {
-        lua_getfield(L, -1, view.name.c_str());
-        if (lua_istable(L, -1)) {
-            lua_getfield(L, -1, funcName);
-            if (lua_isfunction(L, -1)) {
-                foundFunc = true;
-                lua_remove(L, -2);
-                lua_remove(L, -2);
-            } else {
-                lua_pop(L, 2);
-            }
-        } else {
-            lua_pop(L, 1);
-        }
+        lua_rawgeti(L, -1, view.generation);
+        lua_remove(L, -2);
     }
-    if (!foundFunc) {
+    if (!lua_istable(L, -1)) {
         lua_pop(L, 1);
-        lua_getglobal(L, funcName);
-        if (lua_isfunction(L, -1)) {
-            foundFunc = true;
-        }
-    }
-    if (!foundFunc) {
-        lua_pop(L, 1);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, oldSourceRes);
-        lua_setglobal(L, "sourceResource");
-        luaL_unref(L, LUA_REGISTRYINDEX, oldSourceRes);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, oldSourceRoot);
-        lua_setglobal(L, "sourceResourceRoot");
-        luaL_unref(L, LUA_REGISTRYINDEX, oldSourceRoot);
         PushFail(L);
         return 1;
     }
 
-    const int top = lua_gettop(L) - 1;
-    const int argCount = std::max(0, top - 2);
-    for (int i = 3; i <= top; ++i) {
-        lua_pushvalue(L, i);
+    // Read the target's own globals, skipping the metatable fallback to VM bindings.
+    lua_pushlstring(L, funcName.data(), funcName.size());
+    lua_rawget(L, -2);
+    lua_remove(L, -2);
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        PushFail(L);
+        return 1;
     }
-    const int oldTop = lua_gettop(L) - argCount - 1;
-    const int status = lua_pcall(L, argCount, LUA_MULTRET, 0);
+    const int argCount = lua_gettop(L) - 3;
+    lua_insert(L, 3);
 
-    lua_rawgeti(L, LUA_REGISTRYINDEX, oldSourceRes);
+    lua_getglobal(L, "sourceResource");
+    const int oldSource = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_getglobal(L, "sourceResourceRoot");
+    const int oldRoot = luaL_ref(L, LUA_REGISTRYINDEX);
+    ApplyEventSource(L, ActiveVmOwnerNet(), ActiveVmOwnerGeneration());
+
+    int status = LUA_OK;
+    ActiveVmRunAsOwner(view.name, view.netId, view.generation, [&] {
+        status = lua_pcall(L, argCount, LUA_MULTRET, 0);
+    });
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, oldSource);
     lua_setglobal(L, "sourceResource");
-    luaL_unref(L, LUA_REGISTRYINDEX, oldSourceRes);
-    lua_rawgeti(L, LUA_REGISTRYINDEX, oldSourceRoot);
+    luaL_unref(L, LUA_REGISTRYINDEX, oldSource);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, oldRoot);
     lua_setglobal(L, "sourceResourceRoot");
-    luaL_unref(L, LUA_REGISTRYINDEX, oldSourceRoot);
+    luaL_unref(L, LUA_REGISTRYINDEX, oldRoot);
 
     if (status != LUA_OK) {
-        const char* err = lua_tostring(L, -1);
-        LUA_LOGE("call: failed to call '%s:%s': %s", view.name.c_str(), funcName, err ? err : "unknown error");
+        const char* error = lua_tostring(L, -1);
+        LUA_LOGE("call: failed to call '%s:%s': %s", view.name.c_str(), funcName.c_str(), error ? error : "unknown error");
         lua_pop(L, 1);
         PushFail(L);
         return 1;
     }
-    return lua_gettop(L) - oldTop;
+    return lua_gettop(L) - 2;
 }
 
 // CLuaResourceDefs.cpp:470-548.
@@ -366,7 +346,7 @@ int l_load(lua_State* L) {
         lua_pushstring(L, "bad argument #1 to 'load' (function or string expected)");
         return 2;
     }
-    if (luaL_loadbuffer(L, code.data(), code.size(), name.c_str()) != LUA_OK) {
+    if (luaL_loadbufferx(L, code.data(), code.size(), name.c_str(), "t") != LUA_OK) {
         lua_pushnil(L);
         lua_insert(L, -2);
         return 2;
@@ -428,6 +408,29 @@ void ApplyEventSource(lua_State* L, uint16_t netId, uint32_t generation) {
     lua_setglobal(L, "sourceResource");
     lua_pushnil(L);
     lua_setglobal(L, "sourceResourceRoot");
+}
+
+void KeepResourceEnvironment(lua_State* L, uint32_t generation, int index) {
+    const int environment = lua_absindex(L, index);
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &kResourceEnvironments);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_rawsetp(L, LUA_REGISTRYINDEX, &kResourceEnvironments);
+    }
+    lua_pushvalue(L, environment);
+    lua_rawseti(L, -2, generation);
+    lua_pop(L, 1);
+}
+
+void DropResourceEnvironment(lua_State* L, uint32_t generation) {
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &kResourceEnvironments);
+    if (lua_istable(L, -1)) {
+        lua_pushnil(L);
+        lua_rawseti(L, -2, generation);
+    }
+    lua_pop(L, 1);
 }
 
 void InstallResourceLua(lua_State* L) {

@@ -183,7 +183,6 @@ int ExtinguishFire(lua_State* L) {
         if (!fire) return Fail(L);
         const uint32_t id = fire->id;
         if (!DestroyClientElement(id)) return Fail(L);
-        g_fires.erase(id);
         lua_pushboolean(L, 1);
         return 1;
     }
@@ -400,6 +399,8 @@ void Register(lua_State* L) {
 }
 
 }  // namespace
+
+void FireRelease(uint32_t id) { g_fires.erase(id); }
 
 void InstallFireLua(lua_State* L) { Register(L); }
 

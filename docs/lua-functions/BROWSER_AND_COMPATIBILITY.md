@@ -2,10 +2,10 @@
 
 Embedded Chromium web pages, browser mouse/keyboard input, Discord Rich Presence, and backwards compatibility helpers.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 103
-- **Implemented:** 103 (100.0%)
+- **Nonconstant handlers:** 103 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 

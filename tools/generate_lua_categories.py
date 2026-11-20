@@ -58,14 +58,14 @@ CATEGORIES = OrderedDict([
         "file": "ENGINE_AND_MODELS.md",
         "description": "Custom DFF mesh loading, TXD texture dictionaries, COL collision models, model handling overrides, texture filtering, and breakable objects.",
         "groups": ["CLuaEngineDefs", "CLuaPostfxDefs", "CLuaBreakEffectDefs"],
-        "subsystem_notes": "Requires hooking War Drum's RenderWare stream loaders (`RwStreamOpen`, `RwTexDictionaryStreamRead`, `RpClumpStreamRead`) and `CModelInfo` array."
+        "subsystem_notes": "DFF and TXD files use the Android RenderWare readers. Applying and restoring models or textures require a streamer integration that handles model types and asset lifetimes."
     }),
     ("AUDIO_AND_VOICE", {
         "title": "Audio & Voice System (CLuaAudioDefs)",
         "file": "AUDIO_AND_VOICE.md",
         "description": "2D audio playback, 3D spatial sounds, internet radio streams, sound effects, volume/pitch/pan, sound tags, and desktop Speex voice chat.",
         "groups": ["CLuaAudioDefs"],
-        "subsystem_notes": "Desktop uses BASS for sound and Speex for voice. Mobile plays 2D sounds with MediaPlayer and supports explicit Speex/Opus codecs; the stock desktop handshake maps to Speex. Voice capture/playback and packet integration remain pending; 3D sound needs listener attenuation."
+        "subsystem_notes": "Desktop uses BASS for sound and Speex for voice. Android plays resource files and HTTP(S) streams with MediaPlayer. Spatial mixing, GTA sound banks, mission audio, and voice capture/playback require additional engine integration."
     }),
     ("CAMERA", {
         "title": "Camera & Viewport (CLuaCameraDefs)",
@@ -139,6 +139,37 @@ def format_status(status):
         return "Missing"
 
 def guess_conversion_notes(name, group, status, detail):
+    if detail == "l_unsafe":
+        return "Disabled in the client. Returns false."
+    if name in {"load", "loadstring"}:
+        return "Compiles Lua source text. Binary chunks are rejected."
+    if name == "call":
+        return "Resolves the function in the target resource environment, requires a declared export, and runs it with the target owner and caller source fields."
+    if detail.startswith("AudioBackendUnavailable"):
+        return "Returns false. Requires integration with GTA sound banks or mission audio."
+    if name == "getSFXStatus":
+        return "Returns false for recognized banks and nil for unknown banks. GTA sound-bank playback is unavailable."
+    if name == "playSound":
+        return "Plays HTTP(S) streams and resource files through MediaPlayer. Completion releases the sound and fires onClientSoundStopped."
+    if name == "playSound3D":
+        return "Uses MediaPlayer for 2D playback and stores the requested 3D coordinates. Listener attenuation and spatial mixing are pending."
+    if group == "CLuaAudioDefs" and name in {
+        "getSoundBPM", "getSoundLevelData", "getSoundFFTData", "getSoundWaveData", "getSoundMetaTags",
+        "getSoundBufferLength", "getSoundProperties", "setSoundProperties",
+        "isShowSoundEnabled", "showSound", "getSoundEffects", "setSoundEffectEnabled",
+        "getSoundEffectParameters", "setSoundEffectParameter", "setSoundSpeed", "getSoundSpeed",
+        "setSoundMinDistance", "getSoundMinDistance", "setSoundMaxDistance", "getSoundMaxDistance",
+        "setSoundPanningEnabled", "isSoundPanningEnabled",
+    }:
+        return "Uses client-side state or placeholder values. MediaPlayer does not apply these settings or provide these measurements."
+    if name == "playSoundFrontEnd":
+        return "Valid IDs are accepted for script compatibility. GTA frontend sound playback is pending."
+    if group == "CLuaAudioDefs" and ("WorldSound" in name or "AmbientSound" in name or name in {"setRadioChannel", "getRadioChannel"}):
+        return "Uses client-side state. The GTA audio engine is not updated."
+    if name in {"engineLoadDFF", "engineLoadTXD"}:
+        return "Reads a resource-relative file through Android RenderWare and releases the native asset when Lua collects its handle. Raw data and device verification remain pending."
+    if name in {"engineReplaceModel", "engineImportTXD"}:
+        return "Returns false until the Android streamer supports applying and restoring the asset for the target model type."
     if status == "implemented" and name in {
         "isVehicleLocked", "setVehicleLocked", "getVehicleDoorLockMode", "setVehicleDoorLockMode",
         "getVehicleEngineState", "setVehicleEngineState", "getVehicleOverrideLights", "setVehicleOverrideLights",
@@ -403,9 +434,9 @@ for cat_id, cat_info in CATEGORIES.items():
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(f"# {cat_info['title']}\n\n")
         f.write(f"{cat_info['description']}\n\n")
-        f.write("## Parity Status\n\n")
+        f.write("## Binding Coverage\n\n")
         f.write(f"- **Total Functions:** {total}\n")
-        f.write(f"- **Implemented:** {impl_cnt} ({pct:.1f}%)\n")
+        f.write(f"- **Nonconstant handlers:** {impl_cnt} ({pct:.1f}%)\n")
         f.write(f"- **Stubs:** {stub_cnt}\n")
         f.write(f"- **Missing:** {miss_cnt}\n\n")
         f.write(f"> **Technical Requirement:** {cat_info['subsystem_notes']}\n\n")
@@ -423,9 +454,9 @@ for cat_id, cat_info in CATEGORIES.items():
 with open(out_dir / "README.md", "w", encoding="utf-8") as f:
     f.write("# MTA Neon Client Lua API: Complete Conversion Catalog\n\n")
     f.write("This directory contains a complete, exhaustive breakdown of **all 1,581 desktop MTA client Lua functions**, organized into 12 functional categories.\n\n")
-    f.write("Each document lists every single function, its current Android implementation state (`Implemented`, `Stub`, or `Missing`), the exact desktop reference line in `mta_neon_source`, and what engine hooks or network modules are required for conversion.\n\n")
+    f.write("The counts measure Lua binding coverage. `Implemented` identifies a nonconstant Android handler. Behavior, engine support, and device verification are described in the function notes.\n\n")
     f.write("## Summary by Category\n\n")
-    f.write("| Category | Documentation File | Total | Implemented | Stub | Missing | Parity % |\n")
+    f.write("| Category | Documentation File | Total | Nonconstant handlers | Stub | Missing | Nonconstant % |\n")
     f.write("|---|---|---|---|---|---|---|\n")
     for cat_id, cat_info in CATEGORIES.items():
         cat_funcs = []

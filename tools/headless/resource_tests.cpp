@@ -972,47 +972,35 @@ void CheckAudioQueries(WorldRPG::Script::LuaVMStub& vm) {
         assert(isWorldSoundEnabled(5, 2) == true, 'world sound enabled default')
         assert(setWorldSoundEnabled(5, 2, false) == true and isWorldSoundEnabled(5, 2) == false, 'disable world sound')
         assert(resetWorldSounds() == true and isWorldSoundEnabled(5, 2) == true, 'reset world sounds')
-        assert(getSFXStatus('genrl') == true, 'sfx container status')
-        assert(getSFXStatus('invalid_container') == nil, 'invalid sfx container status')
-        local sfxSound = playSFX('genrl', 1, 2)
-        assert(isElement(sfxSound) and getElementType(sfxSound) == 'sound', 'playSFX element')
-        assert(stopSound(sfxSound) == true, 'stop playSFX')
-        local sfx3d = playSFX3D('genrl', 1, 2, 10, 20, 30)
-        assert(isElement(sfx3d) and getElementType(sfx3d) == 'sound', 'playSFX3D element')
-        assert(stopSound(sfx3d) == true, 'stop playSFX3D')
-
-        -- Lot 4: Mission Audio Engine & Audio Events
-        assert(playMissionPassedTune(1) == true, 'tune 1 valid')
-        assert(playMissionPassedTune(2) == true, 'tune 2 valid')
-        assert(playMissionPassedTune(3) == false, 'tune 3 invalid')
-        assert(playMissionPassedTune(0) == false, 'tune 0 invalid')
-        assert(playMissionPassedTune('abc') == false, 'non-number tune')
-
-        local missionHandle = requestMissionAudio(2001)
-        assert(type(missionHandle) == 'number' and missionHandle > 0, 'requestMissionAudio valid event')
-        assert(requestMissionAudio(999) == false, 'requestMissionAudio invalid event range')
-        assert(requestMissionAudio(2001, 10) == false, 'preferredSlot out of bounds')
-        assert(isMissionAudioLoaded(missionHandle) == true, 'mission audio loaded')
-        assert(isMissionAudioFinished(missionHandle) == false, 'mission audio not finished before play')
-        assert(playMissionAudio(missionHandle) == true, 'playMissionAudio')
-        assert(playMissionAudio(missionHandle) == false, 'playMissionAudio cannot replay without request')
-        assert(isMissionAudioFinished(missionHandle) == true, 'mission audio finished after play')
-        assert(releaseMissionAudio(missionHandle) == true, 'releaseMissionAudio')
-        assert(releaseMissionAudio(missionHandle) == false, 'cannot release already released handle')
-
-        assert(reportPositionMissionAudioEvent(100.0, 200.0, 300.0, 1050) == true, 'reportPositionMissionAudioEvent 4 args')
-        assert(reportPositionMissionAudioEvent({100.0, 200.0, 300.0}, 1050) == true, 'reportPositionMissionAudioEvent table pos')
-        assert(reportPositionMissionAudioEvent(100.0, 200.0, 300.0, 500) == false, 'reportPositionMissionAudioEvent invalid event')
-
-        local dummyVeh = {id = 1234, element = true}
-        assert(reportVehicleMissionAudioEvent(dummyVeh, 1050) == true, 'reportVehicleMissionAudioEvent valid')
-        assert(reportVehicleMissionAudioEvent(dummyVeh, 500) == false, 'reportVehicleMissionAudioEvent invalid event')
-        assert(reportVehicleMissionAudioEvent(nil, 1050) == false, 'reportVehicleMissionAudioEvent nil vehicle')
+        assert(getSFXStatus('genrl') == false and getSFXStatus('invalid_container') == nil, 'SFX status')
+        assert(playSFX('genrl', 1, 2) == false and playSFX3D('genrl', 1, 2, 10, 20, 30) == false,
+            'SFX needs a GTA audio backend')
+        assert(playMissionPassedTune(1) == false and requestMissionAudio(2001) == false, 'mission audio unavailable')
+        assert(isMissionAudioLoaded(1) == false and isMissionAudioFinished(1) == false)
+        assert(playMissionAudio(1) == false and releaseMissionAudio(1) == false)
+        assert(reportPositionMissionAudioEvent(100, 200, 300, 1050) == false)
+        assert(reportVehicleMissionAudioEvent(localPlayer, 1050) == false)
     )LUA");
-    WorldRPG::Script::ActiveVmNoteSoundLength(id, 999); // late completion for the replaced id.
+    WorldRPG::Script::ActiveVmNoteSoundLength(id, 999);
     RunLua(vm, "audio-late-metadata", R"LUA(
         assert(getSoundLength(reusedSound) == 0, 'stale callback cannot modify new sound')
-        assert(stopSound(reusedSound) and stopSound(otherQuerySound), 'cleanup')
+        _G.audioFinished = 0
+        assert(addEventHandler('onClientSoundStopped', reusedSound, function(reason)
+            assert(reason == 'finished' and source.id == reusedSound.id)
+            _G.audioFinished = audioFinished + 1
+        end))
+    )LUA");
+    lua_getglobal(L, "reusedSound");
+    lua_getfield(L, -1, "id");
+    const uint32_t reusedId = static_cast<uint32_t>(lua_tointeger(L, -1));
+    lua_pop(L, 2);
+    WorldRPG::Script::ActiveVmNoteSoundEnded(id);
+    WorldRPG::Script::ActiveVmNoteSoundEnded(reusedId);
+    WorldRPG::Script::ActiveVmNoteSoundEnded(reusedId);
+    WorldRPG::Script::ActiveVmPump();
+    RunLua(vm, "audio-ended", R"LUA(
+        assert(audioFinished == 1 and not isElement(reusedSound), 'completion fires once and releases the sound')
+        assert(destroyElement(otherQuerySound) and not isElement(otherQuerySound), 'destroy releases a live sound')
     )LUA");
 }
 
@@ -1569,7 +1557,17 @@ void CheckHelpers(WorldRPG::Script::LuaVMStub& vm) {
         assert(deref(refId) == "kept", "ref")
         local compiled, loadError = loadstring("return 7")
         assert(loadError == nil and compiled() == 7, "loadstring")
-        assert(dofile("x") == false, "unsafe dofile")
+        assert(dofile("x") == false and loadfile("x") == false, "file loaders are disabled")
+        assert(io == nil and package == nil and os.execute == nil and debug.getregistry == nil)
+        assert(type(os.time()) == "number" and type(debug.traceback()) == "string", "safe standard Lua utilities")
+        assert(load("return 11", "text test")() == 11)
+        local binary = string.dump(function() return 7 end)
+        local readerPart = binary
+        assert(load(binary) == nil and load(function()
+            local part = readerPart
+            readerPart = nil
+            return part
+        end) == nil and loadstring(binary) == nil)
         assert(getBodyPartName(3) == "Torso" and getClothesTypeName(1) == "Hair", "names")
         assert(isOOPEnabled() == false and getLocalization().code == "en_US", "locale")
         assert(setWorldSpecialPropertyEnabled("hovercars", true) == true and isWorldSpecialPropertyEnabled("hovercars") == true, "world prop")
@@ -1587,8 +1585,14 @@ void CheckHelpers(WorldRPG::Script::LuaVMStub& vm) {
         assert(fileOpen("../secret") == false, "file sandbox")
         local dotted = fileCreate("a..b.txt")
         assert(type(dotted) == "number" and fileClose(dotted) == true and fileDelete("a..b.txt") == true, "dots in a file name")
-        assert(fileExists("models/testcar.txd") == true, "auto resource cache scan")
-        assert(fileExists(":worldrpg_cars/models/testcar.txd") == true, "colon resource prefix")
+        assert(fileExists("models/testcar.txd") == false, "relative path does not scan unrelated resources")
+        local assetPath = ":worldrpg_cars/models/testcar.txd"
+        local asset = fileOpen(assetPath)
+        assert(type(asset) == "number" and fileRead(asset, 3) == "TXD", "explicit cached asset")
+        assert(fileSetPos(asset, 0) == 0 and fileWrite(asset, "overwrite") == false and fileClose(asset))
+        assert(fileCreate(assetPath) == false and fileDelete(assetPath) == false, "cache stays intact")
+        assert(fileGetContents(assetPath) == "TXD")
+        assert(fileExists(assetPath .. string.char(0) .. "suffix") == false, "embedded NUL is invalid")
         local matrix = getElementMatrix(me)
         assert(type(matrix) == "table" and type(matrix[4][1]) == "number" and matrix[4][4] == 1, "matrix")
         assert(setHeatHaze(10) == true and getHeatHaze() == 10, "heat haze")
@@ -2454,6 +2458,12 @@ void CheckSvg(WorldRPG::Script::LuaVMStub& vm) {
 }
 
 void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
+    const std::string fileName = "lifecycle_asset.ogg";
+    for (const std::string name : {"demo", "other"}) {
+        const std::filesystem::path path = WorldRPG::Net::HttpDownloader::CachedFilePath(name, fileName);
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream(path) << name;
+    }
     // Resource "demo" (net id 5, root 0x1234) and "other" (net id 6, root 0x2222). Both start
     // from one no-cache script each (packet 95).
     WorldRPG::Net::ResourceStartInfo demo;
@@ -2463,7 +2473,7 @@ void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
     demo.dynamicEntityId = 0x1235;
     demo.noClientCacheScripts = 1;
     demo.startCounter = 3;
-    demo.exportedFunctions = {"ping"};
+    demo.exportedFunctions = {"ping", "missing"};
     WorldRPG::Net::ResourceStartInfo other = demo;
     other.name = "other";
     other.resourceId = 6;
@@ -2475,6 +2485,11 @@ void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
     WorldRPG::Script::ActiveVmOnResourceStart(other);
 
     const std::string demoScript = R"LUA(
+        function ping(n)
+            return n + 1, nil, getResourceName(getThisResource()), getResourceName(sourceResource),
+                fileGetContents("lifecycle_asset.ogg"), sourceResourceRoot.id
+        end
+        function hidden() return true end
         _G.demoStarts = (_G.demoStarts or 0) + 1
         addEventHandler("onClientResourceStart", root, function(started)
             _G.demoStarted = true
@@ -2513,7 +2528,12 @@ void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
         assert(addEvent("onMine") == true, "resource event")
         addCommandHandler("democmd", function(name, args) _G.demoCmd = (getThisResource() == _G.demoRes) and args end)
         assert(bindKey("F5", "down", "queryLifecycle"), "demo query bind")
-        _G.demoSound = playSound("http://example/demo.ogg")
+        assert(fileGetContents("lifecycle_asset.ogg") == "demo", "relative path uses current resource")
+        assert(fileGetContents(":other/lifecycle_asset.ogg") == "other", "explicit path uses named resource")
+        local demoText = createNativeUI("text", {name = "demoText", content = "Demo"})
+        assert(demoText and showNativeText(demoText, "objective", 600000))
+        _G.demoSound = playSound("lifecycle_asset.ogg")
+        assert(isElement(_G.demoSound), "resource-relative audio path")
         addEventHandler("onMine", root, function() _G.demoSource = sourceResource == getThisResource() end)
         triggerEvent("onMine", root)
         setTimer(function() _G.demoTicks = (_G.demoTicks or 0) + 1 end, 1, 0)
@@ -2521,7 +2541,18 @@ void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
     )LUA";
     const std::string otherScript = R"LUA(
         assert(bindKey("F6", "up", "queryLifecycle"), "other query bind")
+        local demo = getResourceFromName("demo")
+        local n, empty, owner, caller, file, callerRoot = call(demo, "ping", 41)
+        assert(n == 42 and empty == nil and owner == "demo" and caller == "other")
+        assert(file == "demo" and callerRoot == 0x2222 and getResourceName(getThisResource()) == "other")
+        assert(call(demo, "hidden") == false and call(demo, "missing") == false)
+        _G.exportChecksRan = true
         _G.otherSound = playSound("http://example/other.ogg")
+        local otherText = createNativeUI("text", {name = "otherText", content = "Other"})
+        assert(otherText)
+        addCommandHandler("otherui", function()
+            _G.otherUiShown, _G.otherUiError = showNativeText(otherText, "objective", 600000)
+        end)
         addEventHandler("onClientRender", root, function() _G.otherRenders = (_G.otherRenders or 0) + 1 end)
     )LUA";
     const std::vector<uint8_t> demoBody = NoCacheScriptBody(5, demoScript);
@@ -2532,6 +2563,7 @@ void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
     WorldRPG::Script::ActiveVmPulseResources();
     RunLua(vm, "after-start", R"LUA(
         assert(_G.demoStarted == true and _G.demoStarts == 1, "demo started once")
+        assert(_G.exportChecksRan, "resource exports execute in the target environment")
         assert(_G.demoStartArg == _G.demoRes, "start passes the resource")
         assert(_G.demoStartSource.id == 0x1234, "start source is the root")
         assert(_G.demoResName == "demo" and _G.demoState == "running", "this resource")
@@ -2584,10 +2616,14 @@ void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
     CHECK(WorldRPG::Script::ActiveVmRunCommand("democmd", "hello"));
     RunLua(vm, "command-owner", "assert(_G.demoCmd == 'hello', 'command ran as its resource: ' .. tostring(_G.demoCmd))");
 
+    CHECK(WorldRPG::Script::ActiveVmRunCommand("otherui", ""));
+    RunLua(vm, "native-ui-owned", "assert(otherUiShown == false and otherUiError == 'channel-busy')");
     // RESOURCE_STOP for net id 5: CResourceStopPacket writes the id as a uint16.
     WorldRPG::Net::BitStreamWriter stop;
     stop.Write(static_cast<uint16_t>(5));
     WorldRPG::Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+    CHECK(WorldRPG::Script::ActiveVmRunCommand("otherui", ""));
+    RunLua(vm, "native-ui-released", "assert(otherUiShown == true)");
     RunLua(vm, "stop-event",
            "assert(_G.demoStopped == _G.demoRes, 'stop passes the resource')\n"
            "assert(_G.demoStopSource.id == 0x1234, 'stop source is the root')\n"
@@ -2602,6 +2638,7 @@ void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
         local keys = getBoundKeys("queryLifecycle")
         assert(keys.F5 == nil and keys.F6 == "up", "query drops only the stopped resource's binds")
         assert(not isElement(_G.demoSound) and isElement(_G.otherSound), "only stopped resource audio is released")
+        assert(call(_G.demoRes, "ping", 1) == false, "stopped exports are unavailable")
     )LUA");
 
     // The stopped resource's handlers and timers are gone; the other resource still runs.
@@ -4449,6 +4486,20 @@ int main(int argc, char** argv) {
     if (argc > 1) {
         RunLua(vm, "catalog-count", "assert(_G.catalogModels == 1435, 'catalog holds 1435 models')");
     }
+    RunLua(vm, "sound-before-session-reset", "_G.sessionSound = playSound('https://example/session.ogg')");
+    lua_State* L = WorldRPG::Script::ActiveVmState();
+    lua_getglobal(L, "sessionSound");
+    lua_getfield(L, -1, "id");
+    const uint32_t oldSound = static_cast<uint32_t>(lua_tointeger(L, -1));
+    lua_pop(L, 2);
+    WorldRPG::Script::ActiveVmResetSession();
+    RunLua(vm, "sound-after-session-reset", "_G.sessionSound = playSound('https://example/new-session.ogg')");
+    WorldRPG::Script::ActiveVmNoteSoundEnded(oldSound);
+    WorldRPG::Script::ActiveVmNoteSoundLength(oldSound, 50);
+    WorldRPG::Script::ActiveVmPump();
+    RunLua(vm, "sound-stale-session-callbacks",
+           "assert(isElement(sessionSound) and getSoundLength(sessionSound) == 0)");
+
     std::printf("neon_resource_tests: %d checks, %d failure(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

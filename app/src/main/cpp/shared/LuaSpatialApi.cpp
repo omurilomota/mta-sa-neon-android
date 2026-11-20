@@ -154,6 +154,10 @@ bool ReadNumber(lua_State* L, Args& args, float& out) {
             args.Custom("Expected number, got inf");
             return false;
         }
+        if (std::abs(number) > std::numeric_limits<float>::max()) {
+            args.Custom("Expected number within the destination type range, got out-of-range number");
+            return false;
+        }
         out = static_cast<float>(number);
         return !args.bad;
     }
@@ -162,18 +166,10 @@ bool ReadNumber(lua_State* L, Args& args, float& out) {
     return false;
 }
 bool ReadUint(lua_State* L, Args& args, uint32_t& out) {
-    const int at = args.index;
-    const int type = lua_type(L, at);
-    if (type == LUA_TNONE || type == LUA_TNIL) {
-        args.Type("number", at);
-        ++args.index;
-        return false;
-    }
+    const int index = args.index;
     float unused = 0.f;
-    const int before = args.index;
-    if (!ReadNumber(L, args, unused) && args.detail.find("Expected number") != std::string::npos) return false;
-    if (args.bad && args.detail.find("Expected number") != std::string::npos) return false;
-    const lua_Number number = lua_tonumber(L, before);
+    if (!ReadNumber(L, args, unused)) return false;
+    const lua_Number number = lua_tonumber(L, index);
     if (number < -std::numeric_limits<float>::epsilon()) {
         args.Custom("Expected positive value, got negative");
         return false;
@@ -206,8 +202,10 @@ bool ReadVecParts(lua_State* L, Args& args, Spatial::Vec& out, int count, const 
         float* parts[] = {&out.x, &out.y, &out.z};
         for (int i = 0; i < count; ++i) {
             lua_getfield(L, at, keys[i]);
-            const bool ok = lua_isnumber(L, -1) && std::isfinite(lua_tonumber(L, -1));
-            if (ok) *parts[i] = static_cast<float>(lua_tonumber(L, -1));
+            const lua_Number value = lua_tonumber(L, -1);
+            const bool ok = lua_isnumber(L, -1) && std::isfinite(value) &&
+                            std::abs(value) <= std::numeric_limits<float>::max();
+            if (ok) *parts[i] = static_cast<float>(value);
             lua_pop(L, 1);
             if (!ok) {
                 args.Type(expected, at);

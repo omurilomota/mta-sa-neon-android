@@ -2,10 +2,10 @@
 
 3D objects, world weather, game time, water levels, gravity, minute duration, heat haze, explosions, fires, garage doors, searchlights, and foliage.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 227
-- **Implemented:** 227 (100.0%)
+- **Nonconstant handlers:** 227 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 

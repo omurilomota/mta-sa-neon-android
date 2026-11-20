@@ -72,8 +72,15 @@ bool KindFromName(const std::string& name, Kind& kind) {
     return false;
 }
 
-std::string Owner() {
-    return ActiveVmOwner() + ":" + std::to_string(ActiveVmOwnerNet()) + ":" + std::to_string(ActiveVmOwnerGeneration());
+std::string OwnerKey(const std::string& name, uint16_t netId, uint32_t generation) {
+    return name + ":" + std::to_string(netId) + ":" + std::to_string(generation);
+}
+
+std::string Owner() { return OwnerKey(ActiveVmOwner(), ActiveVmOwnerNet(), ActiveVmOwnerGeneration()); }
+
+void DropOwner(const std::string& owner) {
+    std::erase_if(g_widgets, [&](const auto& entry) { return entry.second.owner == owner; });
+    std::erase_if(g_messages, [&](const auto& entry) { return entry.second.owner == owner; });
 }
 
 int Failure(lua_State* L, const std::string& error) {
@@ -450,15 +457,7 @@ int GetNativeUIState(lua_State* L) {
 
 int ReleaseNativeUI(lua_State* L) {
     if (lua_gettop(L) != 0) return Failure(L, "unexpected-arguments");
-    const std::string owner = Owner();
-    for (auto it = g_widgets.begin(); it != g_widgets.end();) {
-        if (it->second.owner == owner) it = g_widgets.erase(it);
-        else ++it;
-    }
-    for (auto it = g_messages.begin(); it != g_messages.end();) {
-        if (it->second.owner == owner) it = g_messages.erase(it);
-        else ++it;
-    }
+    DropOwner(Owner());
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -528,6 +527,10 @@ void Register(lua_State* L) {
 }
 
 }  // namespace
+
+void NativeUiDropResource(const std::string& name, uint16_t netId, uint32_t generation) {
+    DropOwner(OwnerKey(name, netId, generation));
+}
 
 void InstallNativeUiLua(lua_State* L) { Register(L); }
 

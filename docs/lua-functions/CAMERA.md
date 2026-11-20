@@ -2,10 +2,10 @@
 
 Camera matrix (pos/lookAt), camera target, field of view (FOV), screen shake, fade transitions, clipping planes, and interior viewing.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 47
-- **Implemented:** 47 (100.0%)
+- **Nonconstant handlers:** 47 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 

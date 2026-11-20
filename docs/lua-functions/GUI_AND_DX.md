@@ -2,10 +2,10 @@
 
 2D screen drawing, fonts, text, rectangles, lines, textures, render targets, GUI windows, buttons, edits, labels, gridlists, and 3D line drawing.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 199
-- **Implemented:** 199 (100.0%)
+- **Nonconstant handlers:** 199 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 

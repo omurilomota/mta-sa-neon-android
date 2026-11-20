@@ -25,6 +25,8 @@
 #include "LuaRadarApi.h"
 #include "LuaPickupApi.h"
 #include "LuaLightApi.h"
+#include "LuaWaterApi.h"
+#include "LuaFireApi.h"
 #include "LuaBirdApi.h"
 #include "LuaRopeApi.h"
 #include "ResourceLoader.h"
@@ -152,6 +154,8 @@ bool DestroyNode(uint32_t id) {
     LightRelease(id);
     BirdRelease(id);
     RopeRelease(id);
+    WaterRelease(id);
+    FireRelease(id);
     g_nodes.erase(id);
     g_localNames.erase(id);
     g_callProp.erase(id);

@@ -4,6 +4,7 @@
 #include "LuaAudioApi.h"
 
 #include "LuaApiExtra.h"
+#include "LuaFileApi.h"
 #include "LuaVMStub.h"
 
 #include "lua.hpp"
@@ -13,7 +14,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <map>
 #include <mutex>
 #include <set>
 #include <string>
@@ -38,6 +38,7 @@ std::uint64_t DxNow() {
 struct SoundSlot {
     uint32_t id = 0;
     bool alive = false;
+    bool ended = false;
     float volume = 1.0f;
     bool loop = false;
     bool paused = false;
@@ -78,9 +79,6 @@ std::mutex g_soundMu;
 SoundSlot g_sounds[kMaxSounds];
 uint32_t g_nextSound = kFirstSoundId;
 
-std::mutex g_soundEndMu;
-std::vector<uint32_t> g_soundEnded;
-
 bool g_diagFrontEnd = false;
 bool g_diagSoundSpace = false;
 bool g_showSound = false;
@@ -91,18 +89,6 @@ bool g_ambientGeneral = true;
 bool g_ambientGunfire = true;
 std::set<std::pair<int, int>> g_disabledWorldSounds;
 
-// Lot 4: Mission Audio Engine & Audio Events
-struct MissionAudioSlot {
-    uint32_t handle = 0;
-    uint32_t eventId = 0;
-    bool loaded = true;
-    bool played = false;
-    std::string owner;
-};
-
-uint32_t g_nextMissionHandle = 1;
-std::unordered_map<uint32_t, MissionAudioSlot> g_missionSlots;
-
 SoundSlot* FindSound(uint32_t id) {
     if (!id) return nullptr;
     for (auto& slot : g_sounds) {
@@ -111,51 +97,49 @@ SoundSlot* FindSound(uint32_t id) {
     return nullptr;
 }
 
-uint32_t AllocSound(const char* path, bool loop, bool is3D = false, float x = 0.0f, float y = 0.0f, float z = 0.0f, bool throttled = true) {
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    for (auto& slot : g_sounds) {
-        if (slot.alive) continue;
-        slot = SoundSlot{};
-        slot.alive = true;
-        slot.volume = 1.0f;
-        slot.loop = loop;
-        slot.paused = false;
-        slot.position = 0.0;
-        slot.positionAt = DxNow();
-        slot.minDistance = 5.0f;
-        slot.maxDistance = 20.0f;
-        slot.speed = 1.0f;
-        slot.pan = 0.0f;
-        slot.length = 0.0;
-        slot.owner = ActiveVmOwner();
-        slot.ownerNetId = ActiveVmOwnerNet();
-        slot.ownerGeneration = ActiveVmOwnerGeneration();
-        slot.is3D = is3D;
-        slot.posX = x;
-        slot.posY = y;
-        slot.posZ = z;
-        slot.throttled = throttled;
-        slot.panEnabled = true;
-        slot.sampleRate = 44100.0f;
-        slot.tempo = 0.0f;
-        slot.pitch = 0.0f;
-        slot.reversed = false;
-        slot.bufferLength = 0.0;
-        slot.bpm = 0.0f;
+std::string SoundSource(lua_State* L) {
+    size_t length = 0;
+    const char* text = lua_tolstring(L, 1, &length);
+    if (!text) return {};
+    const std::string_view source(text, length);
+    if (source.find('\0') != std::string_view::npos) return {};
+    if (source.starts_with("http://") || source.starts_with("https://")) return std::string(source);
+    std::filesystem::path file;
+    return ResolveFilePath(source, file) ? file.string() : std::string();
+}
 
-        slot.id = g_nextSound++;
-        if (g_nextSound < kFirstSoundId) g_nextSound = kFirstSoundId;
-
-        char line[512];
-        if (is3D) {
-            std::snprintf(line, sizeof(line), "%u|%d|%s|%.3f|%.3f|%.3f|%d", slot.id, loop ? 1 : 0, path, x, y, z, throttled ? 1 : 0);
-        } else {
-            std::snprintf(line, sizeof(line), "%u|%d|%s", slot.id, loop ? 1 : 0, path);
+uint32_t AllocSound(const std::string& path, bool loop, bool is3D = false, float x = 0.0f, float y = 0.0f,
+                    float z = 0.0f, bool throttled = true) {
+    uint32_t id = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        // Java delivers asynchronous callbacks with signed int IDs. Do not
+        // reuse one across sessions while a previous callback may still arrive.
+        if (g_nextSound > 0x7fffffffu) return 0;
+        for (auto& slot : g_sounds) {
+            if (slot.alive) continue;
+            slot = SoundSlot{};
+            slot.id = id = g_nextSound++;
+            slot.alive = true;
+            slot.loop = loop;
+            slot.positionAt = DxNow();
+            slot.owner = ActiveVmOwner();
+            slot.ownerNetId = ActiveVmOwnerNet();
+            slot.ownerGeneration = ActiveVmOwnerGeneration();
+            slot.is3D = is3D;
+            slot.posX = x;
+            slot.posY = y;
+            slot.posZ = z;
+            slot.throttled = throttled;
+            break;
         }
-        ::WorldRPG::JniBridge::PostGameLine(11, line);
-        return slot.id;
     }
-    return 0;
+    if (id) {
+        // MediaPlayer reads everything after the two separators as the source.
+        const std::string body = std::to_string(id) + (loop ? "|1|" : "|0|") + path;
+        ::WorldRPG::JniBridge::PostGameLine(11, body.c_str());
+    }
+    return id;
 }
 
 double SoundPosition(const SoundSlot& slot) {
@@ -204,13 +188,13 @@ int GetSoundNumber(lua_State* L, float SoundSlot::*field) {
 // --- Basic Sound Handlers ---
 
 int l_playSound(lua_State* L) {
-    const char* path = lua_tostring(L, 1);
-    if (!path || path[0] == '\0') {
+    const std::string path = SoundSource(L);
+    if (path.empty()) {
         lua_pushboolean(L, 0);
         return 1;
     }
     const bool loop = lua_toboolean(L, 2) != 0;
-    uint32_t id = AllocSound(path, loop, false);
+    const uint32_t id = AllocSound(path, loop);
     if (!id) {
         lua_pushboolean(L, 0);
         return 1;
@@ -220,21 +204,7 @@ int l_playSound(lua_State* L) {
 }
 
 int l_stopSound(lua_State* L) {
-    const uint32_t id = ElementIdOf(L, 1);
-    if (!AudioSoundAlive(id)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    {
-        std::lock_guard<std::mutex> lock(g_soundMu);
-        for (auto& slot : g_sounds) {
-            if (slot.id == id) slot.alive = false;
-        }
-    }
-    char line[32];
-    std::snprintf(line, sizeof(line), "%u", id);
-    ::WorldRPG::JniBridge::PostGameLine(12, line);
-    lua_pushboolean(L, 1);
+    lua_pushboolean(L, AudioStopSound(ElementIdOf(L, 1)));
     return 1;
 }
 
@@ -460,8 +430,8 @@ int l_getRadioChannelName(lua_State* L) {
 
 // CLuaAudioDefs::PlaySound3D: path, x, y, z, [loop = false], [throttled = true]
 int l_playSound3D(lua_State* L) {
-    const char* path = lua_tostring(L, 1);
-    if (!path || path[0] == '\0' || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) || !lua_isnumber(L, 4)) {
+    const std::string path = SoundSource(L);
+    if (path.empty() || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) || !lua_isnumber(L, 4)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -960,269 +930,52 @@ int l_resetWorldSounds(lua_State* L) {
 }
 
 int l_getSFXStatus(lua_State* L) {
-    if (!lua_isstring(L, 1)) {
+    if (!lua_isstring(L, 1) || !IsValidAudioContainer(ToLower(lua_tostring(L, 1)))) {
         lua_pushnil(L);
-        return 1;
-    }
-    const std::string container = ToLower(lua_tostring(L, 1));
-    if (IsValidAudioContainer(container)) {
-        lua_pushboolean(L, 1);
-        return 1;
-    }
-    lua_pushnil(L);
-    return 1;
-}
-
-int l_playSFX(lua_State* L) {
-    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const std::string container = ToLower(lua_tostring(L, 1));
-    if (!IsValidAudioContainer(container)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const int bank = static_cast<int>(lua_tointeger(L, 2));
-    const int audio = static_cast<int>(lua_tointeger(L, 3));
-    const bool loop = lua_isboolean(L, 4) ? (lua_toboolean(L, 4) != 0) : false;
-    char path[128];
-    std::snprintf(path, sizeof(path), "sfx://%s/%d/%d", container.c_str(), bank, audio);
-    uint32_t id = AllocSound(path, loop, false);
-    if (!id) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    PushElement(L, id);
-    return 1;
-}
-
-int l_playSFX3D(lua_State* L) {
-    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) ||
-        !lua_isnumber(L, 4) || !lua_isnumber(L, 5) || !lua_isnumber(L, 6)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const std::string container = ToLower(lua_tostring(L, 1));
-    if (!IsValidAudioContainer(container)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const int bank = static_cast<int>(lua_tointeger(L, 2));
-    const int audio = static_cast<int>(lua_tointeger(L, 3));
-    const float x = static_cast<float>(lua_tonumber(L, 4));
-    const float y = static_cast<float>(lua_tonumber(L, 5));
-    const float z = static_cast<float>(lua_tonumber(L, 6));
-    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const bool loop = lua_isboolean(L, 7) ? (lua_toboolean(L, 7) != 0) : false;
-    char path[128];
-    std::snprintf(path, sizeof(path), "sfx://%s/%d/%d", container.c_str(), bank, audio);
-    uint32_t id = AllocSound(path, loop, true, x, y, z, true);
-    if (!id) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    PushElement(L, id);
-    return 1;
-}
-
-// --- Lot 4: Mission Audio Engine & Audio Events ---
-
-int l_playMissionPassedTune(lua_State* L) {
-    if (!lua_isnumber(L, 1)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const int tune = static_cast<int>(lua_tointeger(L, 1));
-    if (tune < 1 || tune > 2) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    char line[32];
-    std::snprintf(line, sizeof(line), "%d", tune);
-    ::WorldRPG::JniBridge::PostGameLine(14, line);
-    lua_pushboolean(L, 1);
-    return 1;
-}
-
-int l_requestMissionAudio(lua_State* L) {
-    if (!lua_isnumber(L, 1)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const uint32_t eventId = static_cast<uint32_t>(lua_tointeger(L, 1));
-    if (!((eventId >= 1800 && eventId <= 1829) || (eventId >= 2000 && eventId <= 45400))) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    if (lua_isnumber(L, 2)) {
-        const int preferredSlot = static_cast<int>(lua_tointeger(L, 2));
-        if (preferredSlot < 0 || preferredSlot >= 4) {
-            lua_pushboolean(L, 0);
-            return 1;
-        }
-    }
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    if (g_missionSlots.size() >= 4) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    uint32_t handle = g_nextMissionHandle++;
-    if (handle == 0) handle = g_nextMissionHandle++;
-    MissionAudioSlot slot;
-    slot.handle = handle;
-    slot.eventId = eventId;
-    slot.loaded = true;
-    slot.played = false;
-    slot.owner = ActiveVmOwner();
-    g_missionSlots[handle] = slot;
-    lua_pushinteger(L, handle);
-    return 1;
-}
-
-int l_isMissionAudioLoaded(lua_State* L) {
-    if (!lua_isnumber(L, 1)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    auto it = g_missionSlots.find(handle);
-    if (it != g_missionSlots.end()) {
-        lua_pushboolean(L, it->second.loaded ? 1 : 0);
-        return 1;
-    }
-    lua_pushboolean(L, 0);
-    return 1;
-}
-
-int l_playMissionAudio(lua_State* L) {
-    if (!lua_isnumber(L, 1)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    auto it = g_missionSlots.find(handle);
-    if (it == g_missionSlots.end() || it->second.played || !it->second.loaded) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    it->second.played = true;
-    char line[32];
-    std::snprintf(line, sizeof(line), "%u", handle);
-    ::WorldRPG::JniBridge::PostGameLine(15, line);
-    lua_pushboolean(L, 1);
-    return 1;
-}
-
-int l_isMissionAudioFinished(lua_State* L) {
-    if (!lua_isnumber(L, 1)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    auto it = g_missionSlots.find(handle);
-    if (it != g_missionSlots.end() && it->second.played) {
-        lua_pushboolean(L, 1);
-        return 1;
-    }
-    lua_pushboolean(L, 0);
-    return 1;
-}
-
-int l_releaseMissionAudio(lua_State* L) {
-    if (!lua_isnumber(L, 1)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    auto it = g_missionSlots.find(handle);
-    if (it == g_missionSlots.end()) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    g_missionSlots.erase(it);
-    lua_pushboolean(L, 1);
-    return 1;
-}
-
-int l_reportPositionMissionAudioEvent(lua_State* L) {
-    float x = 0.0f, y = 0.0f, z = 0.0f;
-    uint32_t eventId = 0;
-    if (lua_isnumber(L, 1) && lua_isnumber(L, 2) && lua_isnumber(L, 3) && lua_isnumber(L, 4)) {
-        x = static_cast<float>(lua_tonumber(L, 1));
-        y = static_cast<float>(lua_tonumber(L, 2));
-        z = static_cast<float>(lua_tonumber(L, 3));
-        eventId = static_cast<uint32_t>(lua_tointeger(L, 4));
-    } else if (lua_istable(L, 1) && lua_isnumber(L, 2)) {
-        lua_rawgeti(L, 1, 1);
-        if (lua_isnumber(L, -1)) x = static_cast<float>(lua_tonumber(L, -1));
-        lua_pop(L, 1);
-        lua_rawgeti(L, 1, 2);
-        if (lua_isnumber(L, -1)) y = static_cast<float>(lua_tonumber(L, -1));
-        lua_pop(L, 1);
-        lua_rawgeti(L, 1, 3);
-        if (lua_isnumber(L, -1)) z = static_cast<float>(lua_tonumber(L, -1));
-        lua_pop(L, 1);
-        eventId = static_cast<uint32_t>(lua_tointeger(L, 2));
     } else {
         lua_pushboolean(L, 0);
-        return 1;
     }
-    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || eventId < 1000 || eventId > 1190) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    char line[128];
-    std::snprintf(line, sizeof(line), "%.3f|%.3f|%.3f|%u", x, y, z, eventId);
-    ::WorldRPG::JniBridge::PostGameLine(16, line);
-    lua_pushboolean(L, 1);
     return 1;
 }
 
-int l_reportVehicleMissionAudioEvent(lua_State* L) {
-    if ((ElementIdOf(L, 1) == 0 && !lua_isuserdata(L, 1)) || !lua_isnumber(L, 2)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const uint32_t eventId = static_cast<uint32_t>(lua_tointeger(L, 2));
-    if (eventId < 1000 || eventId > 1190) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    const uint32_t vehId = ElementIdOf(L, 1);
-    char line[64];
-    std::snprintf(line, sizeof(line), "%u|%u", vehId, eventId);
-    ::WorldRPG::JniBridge::PostGameLine(17, line);
-    lua_pushboolean(L, 1);
+int AudioBackendUnavailable(lua_State* L) {
+    lua_pushboolean(L, 0);
     return 1;
 }
 
 }  // namespace
 
 bool AudioSoundAlive(uint32_t id) {
-    if (!id) return false;
     std::lock_guard<std::mutex> lock(g_soundMu);
-    for (const auto& slot : g_sounds) {
-        if (slot.alive && slot.id == id) return true;
+    return FindSound(id) != nullptr;
+}
+
+bool AudioStopSound(uint32_t id) {
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        SoundSlot* slot = FindSound(id);
+        if (!slot) return false;
+        *slot = SoundSlot{};
     }
-    return false;
+    const std::string text = std::to_string(id);
+    ::WorldRPG::JniBridge::PostGameLine(12, text.c_str());
+    return true;
 }
 
 void AudioNoteSoundEnded(uint32_t id) {
-    std::lock_guard<std::mutex> lock(g_soundEndMu);
-    g_soundEnded.push_back(id);
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    if (SoundSlot* slot = FindSound(id)) slot->ended = true;
 }
 
-void AudioCollectEndedSounds(std::vector<uint32_t>& out) {
-    std::lock_guard<std::mutex> lock(g_soundEndMu);
-    out.swap(g_soundEnded);
+std::vector<uint32_t> AudioCollectEndedSounds() {
+    std::vector<uint32_t> ended;
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    for (auto& slot : g_sounds) {
+        if (!slot.alive || !slot.ended) continue;
+        ended.push_back(slot.id);
+        slot = SoundSlot{};
+    }
+    return ended;
 }
 
 void AudioNoteSoundLength(uint32_t id, double seconds) {
@@ -1234,16 +987,12 @@ void AudioNoteSoundLength(uint32_t id, double seconds) {
 }
 
 void AudioResetSession() {
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    for (auto& slot : g_sounds) slot = SoundSlot{};
-    g_nextSound = kFirstSoundId;
+    AudioStopOwnedSounds();
     g_showSound = false;
     g_radioChannel = 0;
     g_ambientGeneral = true;
     g_ambientGunfire = true;
     g_disabledWorldSounds.clear();
-    g_missionSlots.clear();
-    g_nextMissionHandle = 1;
 }
 
 void AudioStopOwnedSounds(const std::string* owner, uint16_t netId, uint32_t generation) {
@@ -1254,14 +1003,8 @@ void AudioStopOwnedSounds(const std::string* owner, uint16_t netId, uint32_t gen
             if (!slot.alive) continue;
             if (owner && (slot.owner != *owner || (netId && slot.ownerNetId != netId) ||
                           (generation && slot.ownerGeneration != generation))) continue;
-            slot.alive = false;
             stopped.push_back(slot.id);
-        }
-        if (owner) {
-            for (auto it = g_missionSlots.begin(); it != g_missionSlots.end(); ) {
-                if (it->second.owner == *owner) it = g_missionSlots.erase(it);
-                else ++it;
-            }
+            slot = SoundSlot{};
         }
     }
     for (uint32_t id : stopped) {
@@ -1325,19 +1068,19 @@ void InstallAudioLua(lua_State* L) {
         {"setWorldSoundEnabled", l_setWorldSoundEnabled},
         {"isWorldSoundEnabled", l_isWorldSoundEnabled},
         {"resetWorldSounds", l_resetWorldSounds},
-        {"playSFX", l_playSFX},
-        {"playSFX3D", l_playSFX3D},
+        {"playSFX", AudioBackendUnavailable},
+        {"playSFX3D", AudioBackendUnavailable},
         {"getSFXStatus", l_getSFXStatus},
 
         // Lot 4 additions
-        {"playMissionPassedTune", l_playMissionPassedTune},
-        {"requestMissionAudio", l_requestMissionAudio},
-        {"isMissionAudioLoaded", l_isMissionAudioLoaded},
-        {"playMissionAudio", l_playMissionAudio},
-        {"isMissionAudioFinished", l_isMissionAudioFinished},
-        {"releaseMissionAudio", l_releaseMissionAudio},
-        {"reportPositionMissionAudioEvent", l_reportPositionMissionAudioEvent},
-        {"reportVehicleMissionAudioEvent", l_reportVehicleMissionAudioEvent},
+        {"playMissionPassedTune", AudioBackendUnavailable},
+        {"requestMissionAudio", AudioBackendUnavailable},
+        {"isMissionAudioLoaded", AudioBackendUnavailable},
+        {"playMissionAudio", AudioBackendUnavailable},
+        {"isMissionAudioFinished", AudioBackendUnavailable},
+        {"releaseMissionAudio", AudioBackendUnavailable},
+        {"reportPositionMissionAudioEvent", AudioBackendUnavailable},
+        {"reportVehicleMissionAudioEvent", AudioBackendUnavailable},
     };
     for (const auto& bind : binds) {
         lua_pushcfunction(L, bind.fn);

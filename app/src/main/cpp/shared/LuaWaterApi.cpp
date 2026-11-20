@@ -257,12 +257,11 @@ int CreateWater(lua_State* L) {
     if (CouldBeNumber(L, next)) {
         float number = 0.f;
         if (!ReadFinite(L, "createWater", next, number)) return Fail(L);
-        const int value = static_cast<int>(number);
-        if (value < 0 || value > 3) {
+        if (number <= -1.f || number >= 4.f) {
             LogFull("createWater", "Bad argument", "Expected a water.dat flag from 0 to 3");
             return Fail(L);
         }
-        flags = static_cast<unsigned char>(value);
+        flags = static_cast<unsigned char>(static_cast<int>(number));
     } else {
         bool shallow = false;
         if (!ReadBool(L, "createWater", next, shallow, true, false)) return Fail(L);
@@ -453,6 +452,8 @@ void Register(lua_State* L) {
 }
 
 }  // namespace
+
+void WaterRelease(uint32_t id) { g_water.erase(id); }
 
 void InstallWaterLua(lua_State* L) { Register(L); }
 

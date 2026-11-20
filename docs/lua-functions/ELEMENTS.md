@@ -2,10 +2,10 @@
 
 Core element hierarchy (parent/child), element data (synced/local), collisions, dimensions, alpha, positions, velocities, matrix, and spatial streaming.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 81
-- **Implemented:** 81 (100.0%)
+- **Nonconstant handlers:** 81 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 

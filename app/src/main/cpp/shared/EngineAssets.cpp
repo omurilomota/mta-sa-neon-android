@@ -1,10 +1,8 @@
 // Asset load, image, replace, shader, and texture queries.
 // CLuaEngineDefs.cpp:457-1393, 1499-1567, 2073-2126, 2274-2433, 3517-3548.
-// File bytes are not decoded and no IMG, DFF, TXD, COL, IFP, or shader
-// element is created. A call that desktop would reject is rejected here.
-// A call that would decode a file returns false, or raises the desktop
-// load error, and logs DIAG. engineParseSAMPMap follows
-// CLuaEngineDefs.cpp:2436-2544 and CSampMapParser.cpp.
+// RenderWare owns the decoded DFF/TXD objects until the Lua handles are collected.
+// Applying them requires model-type-aware replacement and restoration through
+// the game streamer. Other unsupported load operations report failure to Lua.
 
 #include "EngineAssets.h"
 #include "EngineModelLoader.h"
@@ -40,19 +38,34 @@ constexpr std::uint32_t kClothesModelLast = 30151;
 constexpr std::uint32_t kClothesTexFirst = 30152;
 constexpr std::uint32_t kClothesTexLast = 30541;
 
-struct DffUserdata {
-    static constexpr std::uint32_t kMagic = 0x44464631;
-    std::uint32_t magic;
-    void* clump;
-    char path[256];
-};
+constexpr const char* kDffMetatable = "mta.engine.dff";
+constexpr const char* kTxdMetatable = "mta.engine.txd";
 
-struct TxdUserdata {
-    static constexpr std::uint32_t kMagic = 0x54584431;
-    std::uint32_t magic;
-    void* txd;
-    char path[256];
-};
+void** AssetAt(lua_State* L, const char* metatable) {
+    if (lua_type(L, 1) != LUA_TUSERDATA || lua_rawlen(L, 1) != sizeof(void*)) return nullptr;
+    return static_cast<void**>(luaL_testudata(L, 1, metatable));
+}
+
+int CollectAsset(lua_State* L) {
+    const bool isDff = lua_toboolean(L, lua_upvalueindex(1));
+    if (void** asset = AssetAt(L, isDff ? kDffMetatable : kTxdMetatable)) {
+        if (isDff) NativeDestroyClump(*asset);
+        else NativeDestroyTXD(*asset);
+        *asset = nullptr;
+    }
+    return 0;
+}
+
+void RegisterAsset(lua_State* L, const char* metatable, bool isDff) {
+    if (luaL_newmetatable(L, metatable)) {
+        lua_pushboolean(L, isDff);
+        lua_pushcclosure(L, CollectAsset, 1);
+        lua_setfield(L, -2, "__gc");
+        lua_pushboolean(L, 0);
+        lua_setfield(L, -2, "__metatable");
+    }
+    lua_pop(L, 1);
+}
 
 const char* LuaTypeName(int type) {
     switch (type) {
@@ -261,12 +274,6 @@ bool LooksCol(const std::string& data) {
     return data.size() >= 32 && std::memcmp(data.data(), "COL", 3) == 0 && (data[3] == 'L' || data[3] == '2' || data[3] == '3' || data[3] == '4');
 }
 
-bool LooksDff(const std::string& data) {
-    return data.size() > 32 && (std::memcmp(data.data(), "\x10\x00\x00\x00", 4) == 0 || std::memcmp(data.data(), "\x2B\x00\x00\x00", 4) == 0);
-}
-
-bool LooksTxd(const std::string& data) { return data.size() > 32 && std::memcmp(data.data(), "\x16\x00\x00\x00", 4) == 0; }
-
 bool LooksIfp(const std::string& data) { return data.size() > 32 && std::memcmp(data.data(), "ANP", 3) == 0; }
 
 int LoadAsset(lua_State* L, const char* function, const char* kind, bool (*raw)(const std::string&)) {
@@ -287,59 +294,36 @@ int LoadAsset(lua_State* L, const char* function, const char* kind, bool (*raw)(
 
 int LoadCOL(lua_State* L) { return LoadAsset(L, "engineLoadCOL", "COL", LooksCol); }
 
-int LoadDFF(lua_State* L) {
+int LoadRenderWareAsset(lua_State* L, const char* function, const char* metatable, void* (*load)(const char*)) {
     std::string input;
     std::string error;
-    if (!ReadScriptString(L, 1, "engineLoadDFF", input, error, false, "")) return FailFalse(L, error, true);
+    if (!ReadScriptString(L, 1, function, input, error, false, "")) return FailFalse(L, error, true);
     if (ActiveVmOwnerNet() == 0) return FailFalse(L, "", false);
-    if (input.size() > 32767)
-        return FailFalse(L, Usage("engineLoadDFF", "Error loading DFF", "Corrupt DFF file data or file path too long"), true);
 
-    std::filesystem::path resolved;
-    std::error_code ec;
-    if (ResolveFilePath(input.c_str(), resolved) && std::filesystem::is_regular_file(resolved, ec)) {
-        void* clump = NativeLoadDFF(resolved.string().c_str());
-        if (clump) {
-            auto* ud = static_cast<DffUserdata*>(lua_newuserdata(L, sizeof(DffUserdata)));
-            ud->magic = DffUserdata::kMagic;
-            ud->clump = clump;
-            std::strncpy(ud->path, resolved.string().c_str(), sizeof(ud->path) - 1);
-            ud->path[sizeof(ud->path) - 1] = '\0';
-            return 1;
-        }
-    }
+    std::filesystem::path path;
+    if (input.size() > 32767 || !ResolveFilePath(input, path))
+        return FailFalse(L, Usage(function, "Bad file path", input), true);
 
-    LUA_LOGI("DIAG engineLoadDFF: resource file loading is not hooked");
-    return FailFalse(L, Usage("engineLoadDFF", "Bad file path", input), true);
+    const std::string filename = path.string();
+    auto** asset = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
+    *asset = nullptr;
+    luaL_setmetatable(L, metatable);
+    *asset = load(filename.c_str());
+    if (*asset) return 1;
+
+    lua_pop(L, 1);
+    return FailFalse(L, Usage(function, "Error reading RenderWare file", input), true);
+}
+
+int LoadDFF(lua_State* L) {
+    return LoadRenderWareAsset(L, "engineLoadDFF", kDffMetatable, NativeLoadDFF);
 }
 
 int LoadTXD(lua_State* L) {
-    std::string input;
     std::string error;
-    if (!ReadScriptString(L, 1, "engineLoadTXD", input, error, false, "")) return FailFalse(L, error, true);
-    if (lua_type(L, 2) == LUA_TBOOLEAN) {
-        // The filtering flag is accepted.
-    }
-    if (ActiveVmOwnerNet() == 0) return FailFalse(L, "", false);
-    if (input.size() > 32767)
-        return FailFalse(L, Usage("engineLoadTXD", "Error loading TXD", "Corrupt TXD file data or file path too long"), true);
-
-    std::filesystem::path resolved;
-    std::error_code ec;
-    if (ResolveFilePath(input.c_str(), resolved) && std::filesystem::is_regular_file(resolved, ec)) {
-        void* txd = NativeLoadTXD(resolved.string().c_str());
-        if (txd) {
-            auto* ud = static_cast<TxdUserdata*>(lua_newuserdata(L, sizeof(TxdUserdata)));
-            ud->magic = TxdUserdata::kMagic;
-            ud->txd = txd;
-            std::strncpy(ud->path, resolved.string().c_str(), sizeof(ud->path) - 1);
-            ud->path[sizeof(ud->path) - 1] = '\0';
-            return 1;
-        }
-    }
-
-    LUA_LOGI("DIAG engineLoadTXD: resource file loading is not hooked");
-    return FailFalse(L, Usage("engineLoadTXD", "Bad file path", input), true);
+    bool filtering = true;
+    if (!ReadOptionalBool(L, 2, "engineLoadTXD", true, filtering, error)) return FailFalse(L, error, true);
+    return LoadRenderWareAsset(L, "engineLoadTXD", kTxdMetatable, NativeLoadTXD);
 }
 
 int LoadIFP(lua_State* L) {
@@ -425,46 +409,13 @@ int RestoreCol(lua_State* L) {
 }
 
 int ImportTxd(lua_State* L) {
-    if (lua_type(L, 1) != LUA_TUSERDATA) return FailFalse(L, ScriptBad(L, "engineImportTXD", "txd", 1), true);
-    std::string name;
-    std::string error;
-    if (!ReadScriptString(L, 2, "engineImportTXD", name, error, false, "")) return FailFalse(L, error, true);
-    std::uint32_t id = 0;
-    auto* ud = static_cast<TxdUserdata*>(lua_touserdata(L, 1));
-    if (ud && ud->magic == TxdUserdata::kMagic && ud->txd && ResolveText(name, id)) {
-        if (NativeImportTXD(ud->txd, id)) {
-            lua_pushboolean(L, 1);
-            return 1;
-        }
-    }
-    if (!ResolveText(name, id) || id < kClothesTexFirst || id > kClothesTexLast)
-        LUA_LOGE("Bad 'number' pointer @ 'engineImportTXD'(2)");
-    else LUA_LOGI("DIAG engineImportTXD: texture import is not hooked");
-    lua_pushboolean(L, 0);
-    return 1;
+    if (!AssetAt(L, kTxdMetatable)) return FailFalse(L, ScriptBad(L, "engineImportTXD", "txd", 1), true);
+    return FailFalse(L, Usage("engineImportTXD", "Unavailable", "Model texture replacement needs streamer support"), true);
 }
 
 int ReplaceModel(lua_State* L) {
-    if (lua_type(L, 1) != LUA_TUSERDATA) return FailFalse(L, ScriptBad(L, "engineReplaceModel", "dff", 1), true);
-    std::string name;
-    std::string error;
-    bool alpha = false;
-    if (!ReadScriptString(L, 2, "engineReplaceModel", name, error, false, "")) return FailFalse(L, error, true);
-    if (!ReadOptionalBool(L, 3, "engineReplaceModel", false, alpha, error)) return FailFalse(L, error, true);
-    (void)alpha;
-    std::uint32_t id = 0;
-    if (!ResolveText(name, id)) return FailFalse(L, Usage("engineReplaceModel", "Bad usage", "Expected valid model ID or name at argument 2"), true);
-
-    auto* ud = static_cast<DffUserdata*>(lua_touserdata(L, 1));
-    if (ud && ud->magic == DffUserdata::kMagic && ud->clump) {
-        if (NativeReplaceModel(ud->clump, id)) {
-            lua_pushboolean(L, 1);
-            return 1;
-        }
-    }
-
-    LUA_LOGI("DIAG engineReplaceModel: DFF replacement is not hooked");
-    return FailFalse(L, Usage("engineReplaceModel", "Bad usage", "Model ID " + std::to_string(id) + " replace failed"), true);
+    if (!AssetAt(L, kDffMetatable)) return FailFalse(L, ScriptBad(L, "engineReplaceModel", "dff", 1), true);
+    return FailFalse(L, Usage("engineReplaceModel", "Unavailable", "Model replacement needs streamer support"), true);
 }
 
 int RestoreModel(lua_State* L) {
@@ -757,6 +708,8 @@ int ModelTextures(lua_State* L) {
 }  // namespace
 
 void BindEngineAssetLua(lua_State* L) {
+    RegisterAsset(L, kDffMetatable, true);
+    RegisterAsset(L, kTxdMetatable, false);
     const struct { const char* name; lua_CFunction fn; } binds[] = {
         {"engineLoadCOL", LoadCOL},
         {"engineLoadDFF", LoadDFF},

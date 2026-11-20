@@ -3,6 +3,7 @@
 #include "LuaApiExtra.h"
 #include "LuaDxApi.h"
 #include "LuaVMStub.h"
+#include "LuaAudioApi.h"
 #include "LuaStoredElementApi.h"
 #include "../gtasa/GameEngine.h"
 
@@ -1773,7 +1774,7 @@ static int DestroyElementDispatch(lua_State* L) {
         lua_pushboolean(L, 1);
         return 1;
     }
-    if (ReleaseStoredElement(id)) {
+    if (ReleaseStoredElement(id) || AudioStopSound(id)) {
         lua_pushboolean(L, 1);
         return 1;
     }

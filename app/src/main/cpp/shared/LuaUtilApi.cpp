@@ -835,7 +835,7 @@ int l_loadstring(lua_State* L) {
         lua_pushstring(L, "expected string");
         return 2;
     }
-    if (luaL_loadbuffer(L, text, length, "=(loadstring)") != 0) {
+    if (luaL_loadbufferx(L, text, length, "=(loadstring)", "t") != LUA_OK) {
         lua_pushnil(L);
         lua_insert(L, -2);
         return 2;

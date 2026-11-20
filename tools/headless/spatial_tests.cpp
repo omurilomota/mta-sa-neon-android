@@ -184,6 +184,8 @@ int main() {
         assert(addColPolygonPoint(poly,-2,-2,1) and getColPolygonPointPosition(poly,1)==-2)
         assert(removeColPolygonPoint(poly,1) and #getColPolygonPoints(poly)==5)
         assert(getColPolygonPointPosition(poly,99)==false and removeColPolygonPoint(poly,0)==false)
+        assert(not pcall(getColPolygonPointPosition, poly, 0/0) and not pcall(getColPolygonPointPosition, poly, math.huge))
+        assert(createColRectangle(0, 0, 1e100, 2) == false)
         while #getColPolygonPoints(poly)>3 do assert(removeColPolygonPoint(poly,1)) end
         assert(removeColPolygonPoint(poly,1)==false)
         local tall=createColPolygon(0,0,-1,-1,1,-1,1,1,-1,1)

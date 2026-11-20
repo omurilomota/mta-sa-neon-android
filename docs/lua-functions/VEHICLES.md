@@ -2,10 +2,10 @@
 
 Vehicle physics, handling, sirens, doors, colors, lights, engine state, trailers, nitro, gears, and occupant seats.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 165
-- **Implemented:** 165 (100.0%)
+- **Nonconstant handlers:** 165 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 

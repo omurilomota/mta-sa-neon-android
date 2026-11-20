@@ -2,10 +2,10 @@
 
 Ped animations, tasks, fighting styles, bone transforms, clothes, stats, voice, wanted levels, nametags, and player targeting.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 206
-- **Implemented:** 206 (100.0%)
+- **Nonconstant handlers:** 206 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 

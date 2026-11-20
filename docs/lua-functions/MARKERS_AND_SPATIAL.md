@@ -2,10 +2,10 @@
 
 Checkpoints, radar map blips, collision shapes (spheres, cubes, polygons), radar areas, pickups, and 3D searchlights.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 145
-- **Implemented:** 145 (100.0%)
+- **Nonconstant handlers:** 145 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 

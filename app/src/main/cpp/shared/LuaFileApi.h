@@ -1,9 +1,9 @@
 #pragma once
 #include <filesystem>
-#include <string>
+#include <string_view>
 
 struct lua_State;
 namespace WorldRPG::Script {
 void InstallFileLua(lua_State* L);
-bool ResolveFilePath(const char* text, std::filesystem::path& out);
+bool ResolveFilePath(std::string_view text, std::filesystem::path& out);
 }

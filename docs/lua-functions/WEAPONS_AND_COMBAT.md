@@ -2,10 +2,10 @@
 
 Custom weapons, weapon damage/range/accuracy stats, projectiles (rockets, grenades), bullet traces, and weapon firing flags.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 31
-- **Implemented:** 31 (100.0%)
+- **Nonconstant handlers:** 31 (100.0%)
 - **Stubs:** 0
 - **Missing:** 0
 

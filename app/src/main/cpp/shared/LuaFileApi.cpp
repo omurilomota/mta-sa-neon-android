@@ -5,6 +5,7 @@
 
 #include "lua.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -35,103 +36,72 @@ fs::path Root() {
 #endif
 }
 
-fs::path CacheRoot() {
-    std::string root = WorldRPG::Net::HttpDownloader::GetResourceCacheRoot();
-    if (!root.empty()) return fs::path(root);
-#if defined(__ANDROID__)
-    std::error_code ec;
-    fs::path p1("/data/user/0/com.worldrpg.neonlauncher/files/mta_resource_cache");
-    if (fs::exists(p1, ec)) return p1;
-    return fs::path("/data/data/com.worldrpg.neonlauncher/files/mta_resource_cache");
-#else
-    return fs::path("/tmp/neon-dx-cache");
-#endif
-}
-
-bool HasParentSegment(const std::string& raw) {
-    size_t start = 0;
-    while (start <= raw.size()) {
-        const size_t slash = raw.find_first_of("/\\", start);
-        const size_t count = slash == std::string::npos ? std::string::npos : slash - start;
-        if (raw.compare(start, count, "..") == 0) return true;
-        if (slash == std::string::npos) return false;
-        start = slash + 1;
-    }
-    return false;
-}
-
-} // namespace
-
-bool ResolveFilePath(const char* text, std::filesystem::path& out) {
-    if (!text || text[0] == '\0') return false;
-    std::string raw(text);
-    for (char& c : raw) {
-        if (c == '\\') c = '/';
-    }
-    if (HasParentSegment(raw)) return false;
-    if (raw[0] == '/') return false;
-
-    std::error_code ec;
-    const fs::path cache = CacheRoot();
-
-    // 1. If starts with ':', format is :resource_name/subpath
-    if (raw[0] == ':') {
-        const size_t slash = raw.find('/');
-        if (slash != std::string::npos && slash > 1) {
-            const std::string resName = raw.substr(1, slash - 1);
-            const std::string subPath = raw.substr(slash + 1);
-            const fs::path candidate = cache / resName / subPath;
-            if (fs::is_regular_file(candidate, ec)) {
-                out = candidate;
-                return true;
-            }
-        }
-    }
-
-    // 2. Direct match in cache root: cache / raw
-    const fs::path directCandidate = cache / raw;
-    if (fs::is_regular_file(directCandidate, ec)) {
-        out = directCandidate;
-        return true;
-    }
-
-    // 3. Search in all subdirectories of cache root (any downloaded server resource folder)
-    if (fs::is_directory(cache, ec)) {
-        for (const auto& entry : fs::directory_iterator(cache, ec)) {
-            if (entry.is_directory(ec)) {
-                const fs::path subCandidate = entry.path() / raw;
-                if (fs::is_regular_file(subCandidate, ec)) {
-                    out = subCandidate;
-                    return true;
-                }
-            }
-        }
-    }
-
-    // 4. Check Root() (files/lua)
-    const fs::path luaCandidate = Root() / raw;
-    if (fs::is_regular_file(luaCandidate, ec)) {
-        out = luaCandidate;
-        return true;
-    }
-
-    // 5. Check game_assets directory next to cache
-    const fs::path gameAssets = cache.parent_path() / "game_assets" / raw;
-    if (fs::is_regular_file(gameAssets, ec)) {
-        out = gameAssets;
-        return true;
-    }
-
-    // Fallback: Root() / raw (for creation or fallback)
-    fs::create_directories(Root(), ec);
-    out = Root() / raw;
+// Resolve symlinks before comparing path components, including for paths that
+// do not exist yet and may be created by a file operation.
+bool PathWithin(const fs::path& root, const fs::path& relative, fs::path& out) {
+    if (root.empty() || relative.is_absolute()) return false;
+    std::error_code error;
+    const fs::path absoluteRoot = fs::absolute(root, error);
+    if (error) return false;
+    const fs::path canonicalRoot = fs::weakly_canonical(absoluteRoot, error);
+    if (error) return false;
+    const fs::path candidate = fs::weakly_canonical(canonicalRoot / relative, error);
+    if (error) return false;
+    const auto common = std::mismatch(canonicalRoot.begin(), canonicalRoot.end(), candidate.begin(), candidate.end());
+    if (common.first != canonicalRoot.end()) return false;
+    out = candidate;
     return true;
 }
 
-namespace {
+enum class PathAccess { Read, Write, Asset };
 
-bool Resolve(const char* text, fs::path& out) {
-    return ResolveFilePath(text, out);
+bool Resolve(std::string_view text, PathAccess access, fs::path& out, bool* readOnly = nullptr) {
+    if (text.empty() || text.find('\0') != std::string_view::npos) return false;
+    std::string raw(text);
+    std::replace(raw.begin(), raw.end(), '\\', '/');
+    const fs::path original(raw);
+    if (original.is_absolute()) return false;
+    for (const auto& part : original)
+        if (part == "..") return false;
+
+    std::string resource = ActiveVmOwner();
+    fs::path relative = original;
+    const bool explicitResource = raw.front() == ':';
+    if (explicitResource) {
+        const auto slash = raw.find('/');
+        if (access == PathAccess::Write || slash == std::string::npos || slash < 2 || slash + 1 == raw.size()) return false;
+        resource = raw.substr(1, slash - 1);
+        if (resource == "." || resource == ".." || resource.find(':') != std::string::npos) return false;
+        relative = fs::path(raw.substr(slash + 1));
+        if (relative.is_absolute()) return false;
+    }
+
+    if (access != PathAccess::Write) {
+        std::error_code error;
+        if (access == PathAccess::Read && !explicitResource && PathWithin(Root(), relative, out) &&
+            fs::exists(out, error))
+            return true;
+        const fs::path cache = WorldRPG::Net::HttpDownloader::GetResourceCacheRoot();
+        if (!cache.empty() && !resource.empty() && PathWithin(cache, fs::path(resource) / relative, out) &&
+            fs::exists(out, error)) {
+            if (readOnly) *readOnly = true;
+            return true;
+        }
+        if (explicitResource) return false;
+        if (!cache.empty() && PathWithin(cache.parent_path() / "game_assets", relative, out) &&
+            fs::exists(out, error)) {
+            if (readOnly) *readOnly = true;
+            return true;
+        }
+    }
+    if (access == PathAccess::Asset && !resource.empty()) return false;
+    return PathWithin(Root(), relative, out);
+}
+
+bool Resolve(lua_State* L, int index, fs::path& out, PathAccess access = PathAccess::Read, bool* readOnly = nullptr) {
+    size_t length = 0;
+    const char* text = lua_tolstring(L, index, &length);
+    return text && Resolve(std::string_view(text, length), access, out, readOnly);
 }
 
 OpenFile* FindFile(lua_State* L) {
@@ -143,19 +113,19 @@ OpenFile* FindFile(lua_State* L) {
 void Place(OpenFile& file) {
     file.stream.clear();
     file.stream.seekg(file.pos);
-    file.stream.seekp(file.pos);
+    if (!file.readOnly) file.stream.seekp(file.pos);
 }
 
 int l_fileExists(lua_State* L) {
     fs::path path;
     std::error_code error;
-    lua_pushboolean(L, Resolve(lua_tostring(L, 1), path) && fs::is_regular_file(path, error) ? 1 : 0);
+    lua_pushboolean(L, Resolve(L, 1, path) && fs::is_regular_file(path, error) ? 1 : 0);
     return 1;
 }
 
 int l_fileCreate(lua_State* L) {
     fs::path path;
-    if (!Resolve(lua_tostring(L, 1), path)) {
+    if (!Resolve(L, 1, path, PathAccess::Write)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -183,11 +153,13 @@ int l_fileCreate(lua_State* L) {
 
 int l_fileOpen(lua_State* L) {
     fs::path path;
-    if (!Resolve(lua_tostring(L, 1), path)) {
+    bool cached = false;
+    std::error_code error;
+    if (!Resolve(L, 1, path, PathAccess::Read, &cached) || !fs::is_regular_file(path, error)) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    const bool readOnly = lua_isnoneornil(L, 2) ? false : lua_toboolean(L, 2) != 0;
+    const bool readOnly = cached || lua_toboolean(L, 2) != 0;
     OpenFile opened;
     opened.path = path.string();
     opened.readOnly = readOnly;
@@ -348,7 +320,7 @@ int l_fileIsEOF(lua_State* L) {
 int l_fileDelete(lua_State* L) {
     fs::path path;
     std::error_code error;
-    if (!Resolve(lua_tostring(L, 1), path) || !fs::is_regular_file(path, error)) {
+    if (!Resolve(L, 1, path, PathAccess::Write) || !fs::is_regular_file(path, error)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -359,7 +331,7 @@ int l_fileDelete(lua_State* L) {
 int l_fileCopy(lua_State* L) {
     fs::path from;
     fs::path to;
-    if (!Resolve(lua_tostring(L, 1), from) || !Resolve(lua_tostring(L, 2), to)) {
+    if (!Resolve(L, 1, from) || !Resolve(L, 2, to, PathAccess::Write)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -378,7 +350,7 @@ int l_fileCopy(lua_State* L) {
 int l_fileRename(lua_State* L) {
     fs::path from;
     fs::path to;
-    if (!Resolve(lua_tostring(L, 1), from) || !Resolve(lua_tostring(L, 2), to)) {
+    if (!Resolve(L, 1, from, PathAccess::Write) || !Resolve(L, 2, to, PathAccess::Write)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -413,7 +385,8 @@ int l_fileGetHash(lua_State* L) {
 
 int l_fileGetContents(lua_State* L) {
     fs::path path;
-    if (!Resolve(lua_tostring(L, 1), path)) {
+    std::error_code error;
+    if (!Resolve(L, 1, path) || !fs::is_regular_file(path, error)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -430,20 +403,20 @@ int l_fileGetContents(lua_State* L) {
 int l_pathIsFile(lua_State* L) {
     fs::path path;
     std::error_code error;
-    lua_pushboolean(L, Resolve(lua_tostring(L, 1), path) && fs::is_regular_file(path, error) ? 1 : 0);
+    lua_pushboolean(L, Resolve(L, 1, path) && fs::is_regular_file(path, error) ? 1 : 0);
     return 1;
 }
 
 int l_pathIsDirectory(lua_State* L) {
     fs::path path;
     std::error_code error;
-    lua_pushboolean(L, Resolve(lua_tostring(L, 1), path) && fs::is_directory(path, error) ? 1 : 0);
+    lua_pushboolean(L, Resolve(L, 1, path) && fs::is_directory(path, error) ? 1 : 0);
     return 1;
 }
 
 int l_pathListDir(lua_State* L) {
     fs::path path;
-    if (!Resolve(lua_tostring(L, 1), path)) {
+    if (!Resolve(L, 1, path)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -454,15 +427,24 @@ int l_pathListDir(lua_State* L) {
     }
     lua_newtable(L);
     int index = 0;
-    for (const auto& entry : fs::directory_iterator(path, error)) {
-        lua_pushinteger(L, ++index);
-        lua_pushstring(L, entry.path().filename().string().c_str());
-        lua_settable(L, -3);
+    const fs::directory_iterator end;
+    for (fs::directory_iterator it(path, error); !error && it != end; it.increment(error)) {
+        lua_pushstring(L, it->path().filename().string().c_str());
+        lua_rawseti(L, -2, ++index);
+    }
+    if (error) {
+        lua_pop(L, 1);
+        lua_pushboolean(L, 0);
     }
     return 1;
 }
 
 }  // namespace
+
+bool ResolveFilePath(std::string_view text, fs::path& out) {
+    std::error_code error;
+    return Resolve(text, PathAccess::Asset, out) && fs::is_regular_file(out, error);
+}
 
 void InstallFileLua(lua_State* L) {
     const struct { const char* name; lua_CFunction fn; } binds[] = {
