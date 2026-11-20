@@ -29,7 +29,7 @@ class NeonIdentityApi(private val request: suspend (String, JSONObject, String?)
         val response = request("/v1/auth/discord/poll", JSONObject().put("flow_id", flow.id).put("poll_token", flow.pollToken), null)
         requireSuccess(response)
         if (response.body.optString("status") == "pending") return null
-        return field(response.body, "session_token", 65536)
+        return tokenField(response.body, "session_token", 65536)
     }
 
     suspend fun ticket(session: String, serverId: String, endpoint: String): String {
@@ -40,7 +40,13 @@ class NeonIdentityApi(private val request: suspend (String, JSONObject, String?)
         val response = request("/v1/tickets", JSONObject().put("server_id", serverId).put("server_endpoint", endpoint), session)
         if (response.status == 401) throw SessionExpired()
         requireSuccess(response)
-        return field(response.body, "ticket", 4096)
+        return tokenField(response.body, "ticket", 4096)
+    }
+
+    private fun tokenField(body: JSONObject, fieldName: String, maximum: Int): String {
+        val token = field(body, fieldName, maximum)
+        if (token.any { it.code !in 33..126 }) throw IOException("The SA:O account service returned an invalid token.")
+        return token
     }
 
     private fun requireSuccess(response: Response) {

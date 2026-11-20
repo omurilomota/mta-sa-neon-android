@@ -29,6 +29,7 @@ class SettingsFragment : Fragment() {
     private lateinit var nativeAssetBridge: NativeAssetBridge
     private var syncingAssets = false
     private var identityUi: NeonIdentityUi? = null
+    private var savedInterfaceScale = InterfaceScale.DEFAULT_PERCENT
 
     private val engineTest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
         // MainActivity presents stored failures, including native crashes with no Activity result.
@@ -56,7 +57,11 @@ class SettingsFragment : Fragment() {
                 com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
                     .setTitle(R.string.neon_account_sign_out)
                     .setMessage("Sign out of your SA:O account on this device?")
-                    .setPositiveButton(R.string.neon_account_sign_out) { _, _ -> identity.signOut(); updateIdentity() }
+                    .setPositiveButton(R.string.neon_account_sign_out) { _, _ ->
+                        identity.signOut({ updateIdentity() }, { message ->
+                            context?.let { Toast.makeText(it, message, Toast.LENGTH_LONG).show() }
+                        })
+                    }
                     .setNegativeButton(android.R.string.cancel, null).show()
             } else {
                 identity.signIn({ updateIdentity() }, { message ->
@@ -102,7 +107,8 @@ class SettingsFragment : Fragment() {
 
         // Touch Sensitivity
         binding.sliderTouchSensitivity.value = prefsManager.touchSensitivity.toFloat()
-        binding.sliderInterfaceScale.value = InterfaceScaleSettings.read(requireContext()).toFloat()
+        savedInterfaceScale = InterfaceScaleSettings.read(requireContext())
+        binding.sliderInterfaceScale.value = savedInterfaceScale.toFloat()
     }
 
     private fun setupValueLabels() {
@@ -215,14 +221,21 @@ class SettingsFragment : Fragment() {
         super.onResume()
         updateEngineTestButton()
         updateIdentity()
-        _binding?.let { it.sliderInterfaceScale.value = InterfaceScaleSettings.read(requireContext()).toFloat() }
+        _binding?.let {
+            val current = InterfaceScaleSettings.read(requireContext())
+            if (it.sliderInterfaceScale.value.toInt() == savedInterfaceScale)
+                it.sliderInterfaceScale.value = current.toFloat()
+            savedInterfaceScale = current
+        }
     }
 
     private fun saveSettings() {
-        if (!InterfaceScaleSettings.save(requireContext(), binding.sliderInterfaceScale.value.toInt())) {
+        val scale = binding.sliderInterfaceScale.value.toInt()
+        if (!InterfaceScaleSettings.save(requireContext(), scale)) {
             Toast.makeText(context, R.string.interface_scale_save_failed, Toast.LENGTH_SHORT).show()
             return
         }
+        savedInterfaceScale = scale
         // Save graphics quality
         prefsManager.graphicsQuality = when (binding.graphicsToggle.checkedButtonId) {
             R.id.btnGraphicsLow -> 0

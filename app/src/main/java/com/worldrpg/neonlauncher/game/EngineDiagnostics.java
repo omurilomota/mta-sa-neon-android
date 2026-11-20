@@ -33,6 +33,8 @@ public final class EngineDiagnostics {
     private static final AtomicBoolean checking = new AtomicBoolean();
     private static java.lang.Process logcat;
     private static JSONObject session;
+    private static Thread.UncaughtExceptionHandler previousHandler;
+    private static Thread.UncaughtExceptionHandler engineHandler;
 
     private EngineDiagnostics() {}
 
@@ -76,6 +78,8 @@ public final class EngineDiagnostics {
     }
 
     public static synchronized void begin(Context context) {
+        // A recreated Activity shares the current engine process and its diagnostics.
+        if (session != null) return;
         Context app = context.getApplicationContext();
         boolean debug = isEnabled(app);
         try {
@@ -85,10 +89,12 @@ public final class EngineDiagnostics {
         } catch (Exception error) { Log.w(TAG, "Cannot record engine session", error); }
         if (debug) startLogcat(app);
         Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
-        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+        previousHandler = previous;
+        engineHandler = (thread, error) -> {
             failure(app, "Engine Java failure: " + error);
             if (previous != null) previous.uncaughtException(thread, error);
-        });
+        };
+        Thread.setDefaultUncaughtExceptionHandler(engineHandler);
     }
 
     public static synchronized void noteGpu(Context context, GpuTextureSupport gpu) {
@@ -115,8 +121,14 @@ public final class EngineDiagnostics {
                 write(file(context, "engine-session.json"), session.toString());
             }
         } catch (Exception error) { Log.w(TAG, "Cannot close engine session", error); }
+        session = null;
         if (logcat != null) logcat.destroy();
         logcat = null;
+        if (engineHandler != null && Thread.getDefaultUncaughtExceptionHandler() == engineHandler) {
+            Thread.setDefaultUncaughtExceptionHandler(previousHandler);
+        }
+        engineHandler = null;
+        previousHandler = null;
     }
 
     private static void startLogcat(Context context) {
@@ -175,12 +187,15 @@ public final class EngineDiagnostics {
                     int pid = old.optInt("pid");
                     ActivityManager manager = (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
                     List<ActivityManager.RunningAppProcessInfo> processes = manager == null ? null : manager.getRunningAppProcesses();
-                    if (processes != null) for (ActivityManager.RunningAppProcessInfo process : processes) {
-                        if (process.pid == pid && (activity.getPackageName() + ":engine").equals(process.processName)) return;
-                    }
-                    if (processes == null && pid > 0) {
-                        try { android.system.Os.kill(pid, 0); return; }
-                        catch (android.system.ErrnoException ignored) { }
+                    // A recorded startup error can be reported while the Activity finishes retiring its process.
+                    if ("running".equals(state)) {
+                        if (processes != null) for (ActivityManager.RunningAppProcessInfo process : processes) {
+                            if (process.pid == pid && (activity.getPackageName() + ":engine").equals(process.processName)) return;
+                        }
+                        if (processes == null && pid > 0) {
+                            try { android.system.Os.kill(pid, 0); return; }
+                            catch (android.system.ErrnoException ignored) { }
+                        }
                     }
                     String message = old.optString("error", "The game engine stopped unexpectedly.");
                     boolean debug = old.optBoolean("debug") && isEnabled(activity);

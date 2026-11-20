@@ -29,7 +29,7 @@ data class ServerInfo(
     enum class Status { QUERYING, ONLINE, OFFLINE }
 
     /** Unique key for favorite persistence (ip:port). */
-    fun getKey(): String = "$ip:$port"
+    fun getKey(): String = "${ServerAddress.normalizeHost(ip) ?: ip}:$port"
 
     fun withQuery(result: ServerQuery.Result?): ServerInfo =
         if (result == null) copy(status = Status.OFFLINE)
@@ -51,19 +51,19 @@ data class ServerInfo(
         /** The server configured in .env. */
         fun configured(): ServerInfo = ServerInfo(
             name = BuildConfig.DEFAULT_SERVER_NAME,
-            ip = BuildConfig.DEFAULT_SERVER_IP,
+            ip = ServerAddress.normalizeHost(BuildConfig.DEFAULT_SERVER_IP) ?: BuildConfig.DEFAULT_SERVER_IP,
             port = BuildConfig.DEFAULT_SERVER_PORT,
             logoUrl = BuildConfig.DEFAULT_SERVER_LOGO_URL
         )
 
         /** Creates a ServerInfo from a persisted favorite key (ip:port). */
-        fun fromFavoriteKey(key: String): ServerInfo {
+        fun fromFavoriteKey(key: String): ServerInfo? {
+            val address = ServerAddress.fromKey(key) ?: return null
             val def = configured()
-            if (key == def.getKey()) return def.copy(isFavorite = true)
-            val split = key.lastIndexOf(':')
-            val ip = if (split > 0) key.substring(0, split) else key
-            val port = if (split > 0) key.substring(split + 1).toIntOrNull() ?: 22003 else 22003
-            return ServerInfo(name = key, ip = ip, port = port, isFavorite = true)
+            if (address.key() == def.getKey()) {
+                return def.copy(ip = address.host, isFavorite = true)
+            }
+            return ServerInfo(name = address.key(), ip = address.host, port = address.port, isFavorite = true)
         }
     }
 }

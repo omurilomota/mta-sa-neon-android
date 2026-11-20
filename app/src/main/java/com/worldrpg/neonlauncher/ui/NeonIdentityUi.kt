@@ -19,17 +19,29 @@ class NeonIdentityUi(private val activity: Activity) {
     private var dialog: androidx.appcompat.app.AlertDialog? = null
 
     fun isSignedIn(): Boolean = session.load() != null
-    fun signOut() = session.clear()
+    fun signOut(success: Runnable, failure: Consumer<String>) {
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { session.clear() }
+                success.run()
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                failure.accept("Unable to sign out of your SA:O account. Please try again.")
+            }
+        }
+    }
 
     fun signIn(success: Runnable, failure: Consumer<String>) {
         if (signInJob?.isActive == true) return
         signInJob = scope.launch {
-            dialog = MaterialAlertDialogBuilder(activity).setTitle("SA:O account")
+            val waiting = MaterialAlertDialogBuilder(activity).setTitle("SA:O account")
                 .setMessage("Opening Discord. Complete sign-in in your browser, then return to the launcher.")
                 .setNegativeButton(android.R.string.cancel) { _, _ ->
                     signInJob?.cancel()
                     failure.accept("SA:O sign-in canceled.")
                 }.setCancelable(false).show()
+            dialog = waiting
             try {
                 val flow = api.start()
                 activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(flow.authorizationUrl)).addCategory(Intent.CATEGORY_BROWSABLE))
@@ -40,36 +52,43 @@ class NeonIdentityUi(private val activity: Activity) {
                     token = api.poll(flow)
                 }
                 if (token == null) throw java.io.IOException("SA:O sign-in expired. Please try again.")
-                currentCoroutineContext().ensureActive()
-                session.save(token)
-                dialog?.dismiss()
-                dialog = null
-                success.run()
+                withContext(Dispatchers.IO) {
+                    currentCoroutineContext().ensureActive()
+                    session.save(token)
+                }
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (_: Exception) {
-                dialog?.dismiss()
-                dialog = null
                 failure.accept("Unable to complete SA:O sign-in. Please try again.")
+                return@launch
+            } finally {
+                waiting.dismiss()
+                if (dialog === waiting) dialog = null
             }
+            success.run()
         }
     }
 
     fun authorize(serverId: String, endpoint: String, required: Boolean, success: Consumer<String>, failure: Consumer<String>) {
         scope.launch {
             try {
-                val token = session.load()
+                val token = withContext(Dispatchers.IO) { session.load() }
                 if (token == null) {
                     if (required) failure.accept("Sign in to your SA:O account before connecting to this server.")
                     else success.accept("")
                     return@launch
                 }
-                success.accept(api.ticket(token, serverId, endpoint))
+                val ticket = try {
+                    api.ticket(token, serverId, endpoint)
+                } catch (_: NeonIdentityApi.SessionExpired) {
+                    // A response for the old token can arrive after the launcher saved a new one.
+                    withContext(Dispatchers.IO) { session.clearIfCurrent(token) }
+                    failure.accept("Your SA:O session expired. Sign in again.")
+                    return@launch
+                }
+                success.accept(ticket)
             } catch (cancel: CancellationException) {
                 throw cancel
-            } catch (_: NeonIdentityApi.SessionExpired) {
-                session.clear()
-                failure.accept("Your SA:O session expired. Sign in again.")
             } catch (_: Exception) {
                 failure.accept("Unable to authorize this server with your SA:O account. Please try again.")
             }

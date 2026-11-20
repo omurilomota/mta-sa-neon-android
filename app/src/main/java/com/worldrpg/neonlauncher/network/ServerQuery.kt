@@ -1,12 +1,19 @@
 package com.worldrpg.neonlauncher.network
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 /**
  * ASE server query, ported from the desktop client:
@@ -25,6 +32,8 @@ object ServerQuery {
     private const val BUFFER = 4096           // SERVER_LIST_QUERY_BUFFER
     private const val RESEND_MS = 4000
     private const val TIMEOUT_MS = 8000       // SERVER_LIST_ITEM_TIMEOUT
+    // Both tabs share the same socket budget, including while a refresh is canceled.
+    private val querySlots = Semaphore(12)
 
     data class Result(
         val gameName: String,
@@ -44,41 +53,67 @@ object ServerQuery {
     )
 
     /** Null when the server did not answer or the reply was not a valid EYE2 packet. */
-    suspend fun query(host: String, gamePort: Int): Result? = withContext(Dispatchers.IO) {
-        runCatching {
-            val address = InetAddress.getByName(host)
-            require(gamePort in 1..65535)
-            // Desktop GetQueryPort returns ushort, including wraparound at high game ports.
-            val target = InetSocketAddress(address, (gamePort + QUERY_PORT_OFFSET) and 0xFFFF)
-            DatagramSocket().use { socket ->
-                val request = byteArrayOf('r'.code.toByte())
-                val buf = ByteArray(BUFFER)
-                val deadline = System.currentTimeMillis() + TIMEOUT_MS
-                var sentAt = System.currentTimeMillis()
-                var resent = false
-                socket.send(DatagramPacket(request, request.size, target))
-                while (true) {
-                    val now = System.currentTimeMillis()
-                    if (now >= deadline) return@runCatching null
-                    val wait = if (!resent) (sentAt + RESEND_MS - now) else (deadline - now)
-                    socket.soTimeout = wait.coerceAtLeast(1).toInt()
-                    try {
-                        val packet = DatagramPacket(buf, buf.size)
-                        socket.receive(packet)
-                        if (packet.address != address) continue
-                        val ping = (System.currentTimeMillis() - sentAt).toInt()
-                        parse(buf, packet.length, ping)?.let { return@runCatching it }
-                    } catch (_: SocketTimeoutException) {
-                        if (!resent) {
-                            resent = true
-                            sentAt = System.currentTimeMillis()
-                            socket.send(DatagramPacket(request, request.size, target))
+    suspend fun query(host: String, gamePort: Int): Result? {
+        if (gamePort !in 1..65535) return null
+        // Desktop GetQueryPort returns ushort, including wraparound at high game ports.
+        val port = (gamePort + QUERY_PORT_OFFSET) and 0xFFFF
+        if (port == 0) return null
+        return querySlots.withPermit {
+            withContext(Dispatchers.IO) {
+                try {
+                    // The Android game transport connects over IPv4.
+                    val address = InetAddress.getAllByName(host).firstOrNull { it is Inet4Address }
+                        ?: return@withContext null
+                    DatagramSocket().use { socket ->
+                        socket.connect(InetSocketAddress(address, port))
+                        suspendCancellableCoroutine { continuation ->
+                            continuation.invokeOnCancellation { socket.close() }
+                            if (continuation.isActive) {
+                                val result = try {
+                                    exchange(socket)
+                                } catch (_: IOException) {
+                                    null
+                                }
+                                continuation.resume(result)
+                            }
                         }
                     }
+                } catch (_: IOException) {
+                    null
+                } catch (_: SecurityException) {
+                    null
                 }
-                @Suppress("UNREACHABLE_CODE") null
             }
-        }.getOrNull()
+        }
+    }
+
+    private fun exchange(socket: DatagramSocket): Result? {
+        val request = byteArrayOf('r'.code.toByte())
+        val buffer = ByteArray(BUFFER)
+        val outgoing = DatagramPacket(request, request.size)
+        fun nowMs() = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
+        var sentAt = nowMs()
+        val deadline = sentAt + TIMEOUT_MS
+        val resendAt = sentAt + RESEND_MS
+        var resent = false
+        socket.send(outgoing)
+        while (true) {
+            val now = nowMs()
+            if (now >= deadline) return null
+            if (!resent && now >= resendAt) {
+                resent = true
+                sentAt = now
+                socket.send(outgoing)
+            }
+            socket.soTimeout = ((if (resent) deadline else resendAt) - now).coerceAtLeast(1).toInt()
+            try {
+                val reply = DatagramPacket(buffer, buffer.size)
+                socket.receive(reply)
+                parse(buffer, reply.length, (nowMs() - sentAt).toInt())?.let { return it }
+            } catch (_: SocketTimeoutException) {
+                // Recheck the monotonic deadline before resending or giving up.
+            }
+        }
     }
 
     /** CQueryReceiver::ReadString: the length byte counts itself. */
@@ -99,7 +134,7 @@ object ServerQuery {
     }
 
     internal fun parse(b: ByteArray, len: Int, ping: Int): Result? {
-        if (len < 15) return null
+        if (len !in 15..b.size) return null
         if (b[0] != 'E'.code.toByte() || b[1] != 'Y'.code.toByte() || b[2] != 'E'.code.toByte() || b[3] != '2'.code.toByte()) return null
         val r = Reader(b, len)
         val game = r.readString() ?: return null

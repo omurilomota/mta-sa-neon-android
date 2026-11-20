@@ -83,9 +83,6 @@ public final class EngineHostActivity extends GTASA {
     private int connectPort = 0;
     private String connectNick = "";
     private boolean joinedOnce = false;
-    // A Retry attempt is in flight. nativeConnect only schedules the join, so a failure can still arrive later
-    // through onNativeConnectionStateChange; the dialog has to come back then. UI thread only.
-    private boolean retryPending = false;
     private DisconnectDialog disconnectDialog;
     private volatile boolean netRunning;
     private boolean clientReady;
@@ -121,9 +118,7 @@ public final class EngineHostActivity extends GTASA {
                     .setTitle("SA:O account")
                     .setMessage("This server requires SA:O sign-in. Connect your Discord account to continue.")
                     .setPositiveButton("Sign in with Discord", (dialog, which) -> identityUi.signIn(() -> {
-                        retryPending = true;
-                        if (!nativeConnect(connectIp, connectPort, connectNick)) {
-                            retryPending = false;
+                        if (!connectToServer()) {
                             showDisconnectDialog("SA:O account", "Unable to restart the server connection. Please retry.");
                         }
                     }, message -> showDisconnectDialog("SA:O account", message)))
@@ -225,8 +220,8 @@ public final class EngineHostActivity extends GTASA {
             gameDirectory = generation.getPath() + File.separator;
             GpuTextureSupport gpu = GpuProbe.inspect();
             EngineDiagnostics.noteGpu(this, gpu);
-            gpu.validate(generation);
             EngineCaseAliases.prepare(generation);
+            gpu.validate(generation);
             validateLevelDefinitions(generation);
             // The VM calls the engine's JNI_OnLoad and registers the native
             // NvEventQueueActivity methods. A plain dlopen does not do this.
@@ -276,29 +271,30 @@ public final class EngineHostActivity extends GTASA {
     private void startMtaSession() {
         String ip = getIntent().getStringExtra(GameActivity.EXTRA_SERVER_IP);
         if (ip == null || ip.isEmpty()) ip = BuildConfig.DEFAULT_SERVER_IP;
-        if (ip == null || ip.isEmpty() || netRunning) return;
+        if (ip == null || ip.isEmpty() || clientReady || bootError != null) return;
         int port = getIntent().getIntExtra(GameActivity.EXTRA_SERVER_PORT, BuildConfig.DEFAULT_SERVER_PORT);
         try {
-            // Same directory the :engine linker searches for DT_NEEDED.
-// libc++ is linked statically into WorldRPGNeon (c++_static); no shared runtime to preload.
+            // libc++ is linked statically into WorldRPGNeon.
             System.loadLibrary("WorldRPGNeon");
             Log.i(TAG, "MTA client library loaded");
         } catch (UnsatisfiedLinkError error) {
             Log.e(TAG, "MTA client library failed to load", error);
+            onEngineBootstrapError("Unable to load the MTA client library.");
             return;
         }
         if (!nativeInit() || !nativeSetAssetPath(gameDirectory)) {
-            Log.e(TAG, "MTA client failed to start");
+            onEngineBootstrapError("Unable to initialize the MTA client.");
             return;
         }
-        clientReady = true;
         try {
             if (!nativeSetNetworkSerial(com.worldrpg.neonlauncher.network.NetDeviceIdentity.get(this)))
                 throw new IllegalStateException("Unable to set network identity");
         } catch (RuntimeException error) {
-            showDisconnectDialog("Error", "Unable to initialize this device's network identity. Please restart the launcher.");
+            Log.e(TAG, "Network identity initialization failed", error);
+            onEngineBootstrapError("Unable to initialize this device's network identity.");
             return;
         }
+        clientReady = true;
         int screenW = dxOverlay != null ? dxOverlay.getWidth() : 0;
         int screenH = dxOverlay != null ? dxOverlay.getHeight() : 0;
         if (screenW <= 0 || screenH <= 0) {
@@ -313,16 +309,18 @@ public final class EngineHostActivity extends GTASA {
         connectIp = ip;
         connectPort = port;
         connectNick = nick;
-        if (!nativeConnect(ip, port, nick)) {
-            Log.e(TAG, "MTA connect failed to start");
+        if (!connectToServer()) {
             // Desktop CConnectManager::Connect when StartNetwork fails (CConnectManager.cpp:246-255).
             showDisconnectDialog("Error [CC22]", "Connecting to " + ip + " at port " + port + " failed!");
-            return;
         }
-        // Before SERVER_JOIN_COMPLETE opens the desktop loading screen, the same screen shows the connect step
-        // (desktop CConnectManager shows "Connecting to ..." in its own box).
-        if (loadingView != null) loadingView.update("Connecting to " + ip + ":" + port, 0f, 0f, 1f);
+    }
+
+    private boolean connectToServer() {
+        if (!clientReady || isFinishing() || isDestroyed()) return false;
+        if (!nativeConnect(connectIp, connectPort, connectNick)) return false;
+        if (loadingView != null) loadingView.update("Connecting to " + connectIp + ":" + connectPort, 0f, 0f, 1f);
         else showDownload(0, "Connecting to server");
+        if (netRunning) return true;
         netRunning = true;
         netThread = new Thread(() -> {
             while (netRunning) {
@@ -336,6 +334,7 @@ public final class EngineHostActivity extends GTASA {
             }
         }, "mta-net");
         netThread.start();
+        return true;
     }
 
     private void installTransferAndChat() {
@@ -837,7 +836,6 @@ public final class EngineHostActivity extends GTASA {
             if (isFinishing() || isDestroyed()) return;
             if (connected) {
                 joinedOnce = true;
-                retryPending = false;
                 // The "Connecting to server" panel ends with the join, as the desktop connect dialog does.
                 hideDownload();
                 appendChat("#ACD5FEConnected to the server.");
@@ -864,7 +862,6 @@ public final class EngineHostActivity extends GTASA {
                 // Every refusal, timeout and drop is a popup, as on the desktop (ShowErrorMessageBox), with
                 // Reconnect / Close (P3.1) so the player is never left in a dead session.
                 joinedOnce = false;
-                retryPending = false;
                 showDisconnectDialog(title, text);
             }
         });
@@ -1030,14 +1027,10 @@ public final class EngineHostActivity extends GTASA {
         disconnectDialog = new DisconnectDialog(this, title, message, gameDirectory, new DisconnectDialog.Actions() {
             @Override public void onRetry() {
                 disconnectDialog = null;
-                if (!nativeConnect(connectIp, connectPort, connectNick)) {
-                    retryPending = false;
+                if (!connectToServer()) {
                     String failed = "Connecting to " + connectIp + " at port " + connectPort + " failed!";
                     appendChat("#FF6666" + failed);
                     showDisconnectDialog("Error [CC22]", failed);
-                } else {
-                    // The attempt was only scheduled; its result arrives in onNativeConnectionStateChange.
-                    retryPending = true;
                 }
             }
             @Override public void onQuit() {

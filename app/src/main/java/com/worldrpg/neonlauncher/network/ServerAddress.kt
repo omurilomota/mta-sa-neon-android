@@ -10,7 +10,7 @@ data class ServerAddress(val host: String, val port: Int) {
         fun normalizeHost(input: String): String? {
             val host = input.trim().removeSuffix(".").lowercase(Locale.ROOT)
             if (host.isEmpty() || host.length > 253) return null
-            if (host.all { it.isDigit() || it == '.' }) {
+            if (host.all { it in '0'..'9' || it == '.' }) {
                 val octets = host.split('.')
                 if (octets.size != 4 || octets.any { it.isEmpty() || it.length > 3 || it.toIntOrNull() !in 0..255 }) return null
                 return octets.joinToString(".") { it.toInt().toString() }

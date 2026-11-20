@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -22,7 +23,13 @@ class NeonIdentitySession(context: Context) {
         FileOutputStream(lockFile, true).channel.use { channel -> channel.lock().use { block() } }
     }
 
-    fun load(): String? = locked {
+    fun load(): String? = try {
+        locked { readToken() }
+    } catch (_: IOException) {
+        null
+    }
+
+    private fun readToken(): String? =
         try {
             // openRead restores AtomicFile's previous complete write first.
             val bytes = file.openRead().use { input ->
@@ -35,10 +42,8 @@ class NeonIdentitySession(context: Context) {
             check(token.isNotEmpty() && token.length <= 65536 && token.all { it.code in 33..126 })
             token
         } catch (_: Exception) {
-            file.delete()
             null
         }
-    }
 
     fun save(token: String) = locked {
         require(token.isNotEmpty() && token.length <= 65536 && token.all { it.code in 33..126 })
@@ -56,6 +61,10 @@ class NeonIdentitySession(context: Context) {
     }
 
     fun clear() = locked { file.delete() }
+
+    fun clearIfCurrent(token: String) = locked {
+        if (readToken() == token) file.delete()
+    }
 
     private fun key(create: Boolean): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

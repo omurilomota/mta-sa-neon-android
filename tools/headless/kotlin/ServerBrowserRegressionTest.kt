@@ -1,13 +1,23 @@
 package com.worldrpg.neonlauncher.network
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicInteger
 
 private fun server(id: String = "test-server", endpoint: String = "192.0.2.1:22003"): JSONObject = JSONObject()
@@ -24,6 +34,39 @@ private fun invalid(bytes: ByteArray) {
 
 private fun List<ServerBrowserService.BrowserState>.lastServers() = filterIsInstance<ServerBrowserService.BrowserState.Success>().last().servers
 
+private suspend fun checkLiveQuery() = coroutineScope {
+    // Some development hosts forward 127.0.0.1 to another network namespace.
+    val local = InetAddress.getByName(System.getenv("NEON_TEST_UDP_ADDRESS") ?: "127.0.0.1")
+    DatagramSocket(0, local).use { server ->
+        server.soTimeout = 3000
+        val gamePort = server.localPort - ServerQuery.QUERY_PORT_OFFSET
+        val responder = async(Dispatchers.IO) {
+            val request = DatagramPacket(ByteArray(8), 8)
+            server.receive(request)
+            check(request.length == 1 && request.data[0] == 'r'.code.toByte())
+            val reply = ByteArrayOutputStream().apply {
+                write("EYE2".toByteArray())
+                for (field in listOf("mta", gamePort.toString(), "Loopback", "Race", "Map", "1.7")) {
+                    val encoded = field.toByteArray()
+                    write(encoded.size + 1)
+                    write(encoded)
+                }
+                write(byteArrayOf(0, 0, 1, 8))
+            }.toByteArray()
+            server.send(DatagramPacket(reply, reply.size, request.socketAddress))
+        }
+        check(withTimeout(4000) { ServerQuery.query(local.hostAddress, gamePort) }?.serverName == "Loopback")
+        responder.await()
+
+        val pending = async { ServerQuery.query(local.hostAddress, gamePort) }
+        withContext(Dispatchers.IO) {
+            server.receive(DatagramPacket(ByteArray(8), 8))
+        }
+        // No reply. Cancellation should close the receive socket before its timeout.
+        withTimeout(1000) { pending.cancelAndJoin() }
+    }
+}
+
 fun main(args: Array<String>) = runBlocking {
     check(ServerAddress.normalizeHost("  EXAMPLE.org. ") == "example.org")
     check(ServerAddress.normalizeHost("192.168.001.010") == "192.168.1.10")
@@ -34,6 +77,9 @@ fun main(args: Array<String>) = runBlocking {
     check(ServerAddress.parsePort("65535") == 65535)
     check(ServerAddress.fromKey("EXAMPLE.org:22003") == ServerAddress("example.org", 22003))
     check(ServerAddress.fromKey("example.org:invalid") == null)
+    check(ServerInfo.fromFavoriteKey("EXAMPLE.org.:02203")?.getKey() == "example.org:2203")
+    check(ServerInfo.fromFavoriteKey("192.000.002.005:22003")?.ip == "192.0.2.5")
+    check(ServerInfo.fromFavoriteKey("example.org:invalid") == null)
 
     val entries = NeonServerRegistry.parse(catalogue(server().put("endpoints", JSONArray().put("192.0.2.1:22003").put("192.0.2.1:22004"))))
     check(entries.size == 2 && entries.all { it.registryId == "test-server" && it.name == "Official name" })
@@ -81,7 +127,12 @@ fun main(args: Array<String>) = runBlocking {
     mode = 2
     check(cached.fetchServerList().toList().lastServers().isEmpty()) { "Empty catalogue resurrected expired servers" }
     val unavailable = ServerBrowserService(fetchRegistry = { throw IOException("offline") }, queryServer = { _, _ -> null })
-    check(unavailable.fetchServerList(setOf("192.0.2.5:22003", "corrupt")).toList().lastServers().size == 2)
+    val favoriteFallback = unavailable.fetchServerList(
+        setOf("192.0.2.5:22003", "192.000.002.005:22003", "corrupt")
+    ).toList().lastServers()
+    check(favoriteFallback.size == 2)
+    check(favoriteFallback.single { it.isFavorite }.getKey() == "192.0.2.5:22003")
+    checkLiveQuery()
 
     val active = AtomicInteger()
     val peak = AtomicInteger()

@@ -53,12 +53,9 @@ class FavoritesFragment : Fragment() {
     private fun loadFavorites() {
         queries.forEach { it.cancel() }
         queries.clear()
-        val keys = prefsManager.getFavorites().filter {
-            com.worldrpg.neonlauncher.network.ServerAddress.fromKey(it) != null
-        }.sorted()
-        binding.emptyState.visibility = if (keys.isEmpty()) View.VISIBLE else View.GONE
-        binding.favoritesList.visibility = if (keys.isEmpty()) View.GONE else View.VISIBLE
-        servers = keys.map { ServerInfo.fromFavoriteKey(it) }
+        servers = prefsManager.getFavorites().sorted().mapNotNull(ServerInfo::fromFavoriteKey)
+        binding.emptyState.visibility = if (servers.isEmpty()) View.VISIBLE else View.GONE
+        binding.favoritesList.visibility = if (servers.isEmpty()) View.GONE else View.VISIBLE
         serverAdapter.submitList(servers)
         servers.forEach { s ->
             queries += viewLifecycleOwner.lifecycleScope.launch {

@@ -50,6 +50,12 @@ fun main() = runBlocking {
     check(needsLogin)
     val oversized = NeonIdentityApi { _, _, _ -> NeonIdentityApi.Response(200, JSONObject().put("ticket", "T".repeat(4097))) }
     rejected { oversized.ticket(session, "server-id", "1.2.3.4:22003") }
+    for (malformed in listOf("has spaces", "non-ascii-é", "bad\u0000token")) {
+        val wrongToken = NeonIdentityApi { _, _, _ -> NeonIdentityApi.Response(200,
+            JSONObject().put("ticket", malformed).put("session_token", malformed)) }
+        rejected { wrongToken.poll(flow) }
+        rejected { wrongToken.ticket(session, "server-id", "1.2.3.4:22003") }
+    }
     val invalid = NeonIdentityApi { _, _, _ -> error("invalid endpoint must not reach the service") }
     rejected { invalid.ticket(session, "server-id", "https://attacker.test") }
     for (endpoint in listOf("999.1.2.3:22003", "1.2.3.4:0", "1.2.3.4:65536", "01.2.3.4:22003", "1.2.3.4:02203"))

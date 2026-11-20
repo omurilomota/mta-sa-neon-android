@@ -35,7 +35,7 @@ class AddFavoriteDialog : DialogFragment() {
                 binding.portLayout.error = if (port == null) getString(R.string.server_port_invalid) else null
                 if (host == null || port == null) return@setOnClickListener
                 val address = ServerAddress(host, port)
-                if (prefs.getFavorites().any { ServerAddress.fromKey(it) == address }) {
+                if (prefs.isFavorite(address.key())) {
                     binding.hostLayout.error = getString(R.string.server_already_favorite)
                     return@setOnClickListener
                 }

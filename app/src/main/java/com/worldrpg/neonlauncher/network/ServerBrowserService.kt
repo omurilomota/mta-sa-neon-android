@@ -32,6 +32,7 @@ class ServerBrowserService(
      */
     fun fetchServerList(favoriteKeys: Set<String> = emptySet()): Flow<BrowserState> = channelFlow {
         send(BrowserState.Loading)
+        val favorites = favoriteKeys.mapNotNullTo(hashSetOf()) { ServerAddress.fromKey(it)?.key() }
         val catalogue = try {
             fetchRegistry().also { cachedRegistry = it }
         } catch (cancelled: CancellationException) {
@@ -40,12 +41,11 @@ class ServerBrowserService(
             send(BrowserState.Error("Unable to refresh the Neon server list. Showing available servers."))
             cachedRegistry ?: buildList {
                 add(ServerInfo.configured())
-                favoriteKeys.sorted().filter { ServerAddress.fromKey(it) != null }
-                    .forEach { add(ServerInfo.fromFavoriteKey(it)) }
+                addAll(favorites.sorted().mapNotNull(ServerInfo::fromFavoriteKey))
             }
         }
         val servers = catalogue.distinctBy { it.getKey() }.map {
-            it.copy(status = ServerInfo.Status.QUERYING, isFavorite = it.getKey() in favoriteKeys)
+            it.copy(status = ServerInfo.Status.QUERYING, isFavorite = it.getKey() in favorites)
         }.toMutableList()
         send(BrowserState.Success(servers.toList()))
 
