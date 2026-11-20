@@ -1,5 +1,6 @@
 #include "DebugFlags.h"
 #include "LuaVMStub.h"
+#include "EngineAssets.h"
 #include "LuaElementTree.h"
 #include "LuaCameraApi.h"
 #include "LuaFieldApi.h"
@@ -2614,6 +2615,7 @@ std::string LuaVMStub::pumpDx() {
 
 void LuaVMStub::shutdown() {
     if (!pImpl_->initialized) return;
+    ResetDffElements();
     AudioStopOwnedSounds();
     Projectiles::Reset();
     ResetSpatial();
@@ -2820,6 +2822,7 @@ static void DropResourceState(lua_State* L, const std::string& name, uint16_t ne
     AudioStopOwnedSounds(&name, netId, generation);
     GuiDropResource(name, netId, generation);
     NativeUiDropResource(name, netId, generation);
+    DropResourceDffs(generation);
     DropResourceEnvironment(L, generation);
     Events::DropOwner(name, netId, generation);
     KeyBindsDropResource(L, name, netId, generation);
@@ -2923,7 +2926,24 @@ void ActiveVmOnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {
 bool ActiveVmPulseResources() {
     if (!g_active || !g_active->isReady() || !g_dx.L) return false;
     const bool wasHooked = g_dx.chatHooked;
-    for (const auto& job : WorldRPG::Script::ResourceLoader::Pump()) RunResourceJob(g_dx.L, job);
+    std::vector<ResourceLoader::FileDownloadEvent> downloads;
+    for (const auto& job : ResourceLoader::Pump(downloads)) RunResourceJob(g_dx.L, job);
+    for (const auto& done : downloads) {
+        ResourceLoader::ResourceView target;
+        if (!ResourceLoader::CopyResourceByGeneration(done.generation, target) || !target.root) continue;
+        lua_State* L = g_dx.L;
+        lua_getglobal(L, "source");
+        PushElement(L, target.root);
+        lua_setglobal(L, "source");
+        lua_pushlstring(L, done.file.data(), done.file.size());
+        lua_pushboolean(L, done.ok);
+        ResourceLoader::ResourceView requester;
+        if (!ResourceLoader::CopyResourceByGeneration(done.requesterGeneration, requester) ||
+            !PushResourceInstance(L, requester.netId, done.requesterGeneration))
+            lua_pushboolean(L, 0);
+        fireHandlers("onClientFileDownloadComplete", 3, target.root);
+        lua_setglobal(L, "source");
+    }
     FlushPendingChat(g_dx.L);
     return !wasHooked && g_dx.chatHooked;
 }

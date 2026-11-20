@@ -11,9 +11,11 @@
 // Usage: neon_resource_tests [path/to/catalog.json]
 
 #include "HttpDownloader.h"
+#include "EngineModelLoader.h"
 #include <filesystem>
 #include <fstream>
 #include "LuaEventRegistry.h"
+#include "LuaFileApi.h"
 #include "LuaKeyBindApi.h"
 #include "LuaGuiApi.h"
 #include "LuaMtaWindowApi.h"
@@ -3112,6 +3114,93 @@ private:
     std::thread thread_;
 };
 
+void CheckModelDownloads(WorldRPG::Script::LuaVMStub& vm) {
+    using namespace WorldRPG;
+
+    LoopbackHttp server(LoopbackHttp::Mode::Respond);
+    CHECK(server.ok());
+    if (!server.ok()) return;
+    const std::string base = "http://127.0.0.1:" + std::to_string(server.port());
+    Net::HttpDownloader::SetServerBase(base);
+
+    Net::ResourceStartInfo model;
+    model.name = "model-download-test";
+    model.resourceId = 120;
+    model.entityId = 0x7300;
+    model.noClientCacheScripts = 1;
+    Net::ResourceFile asset;
+    asset.name = "model.dff";
+    asset.clientFile = true;
+    asset.type = Net::kResourceFileTypeClientFile;
+    constexpr char response[] = "ok-body";
+    asset.size = sizeof(response) - 1;
+    asset.crc = crc32(0, reinterpret_cast<const unsigned char*>(response), asset.size);
+    model.files = {asset};
+
+    const std::filesystem::path path = Net::HttpDownloader::CachedFilePath(model.name, asset.name);
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream(path) << "old";
+    Script::ActiveVmOnResourceStart(model);
+    const auto body = NoCacheScriptBody(model.resourceId, R"LUA(
+        _G.modelDownloadEvents = 0
+        addEventHandler("onClientFileDownloadComplete", resourceRoot, function(name, ok, requester)
+            assert(name == "model.dff" and ok and requester == getThisResource())
+            assert(source.id == resourceRoot.id and fileGetContents(name) == "ok-body")
+            _G.modelDownloadEvents = _G.modelDownloadEvents + 1
+        end)
+        assert(downloadFile("undeclared.dff") == false)
+        assert(downloadFile("./model.dff") and downloadFile("model.dff"))
+        assert(_G.modelDownloadEvents == 0, "completion runs on the next resource pulse")
+    )LUA");
+    CHECK(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8));
+    Script::ActiveVmPulseResources();
+    std::filesystem::path resolved;
+    CHECK(!Script::ResolveModelPath(":model-download-test/model.dff", resolved));
+    CHECK(Net::HttpDownloader::WaitIdle(3000));
+    Script::ActiveVmPulseResources();
+    CHECK(Script::ResolveModelPath(":model-download-test/model.dff", resolved) && resolved == path);
+    RunLua(vm, "download-model", "assert(_G.modelDownloadEvents == 1)");
+
+    LoopbackHttp oldServer(LoopbackHttp::Mode::Hold);
+    CHECK(oldServer.ok());
+    if (!oldServer.ok()) return;
+    model.name = "model-download-restart-test";
+    model.resourceId = 121;
+    model.entityId = 0x7301;
+    model.noClientCacheScripts = 0;
+    model.files[0].autoDownload = true;
+    const std::string restartPath = Net::HttpDownloader::CachedFilePath(model.name, asset.name);
+    std::filesystem::remove(restartPath);
+    Net::HttpDownloader::SetServerBase("http://127.0.0.1:" + std::to_string(oldServer.port()));
+    model.files[0].crc ^= 1u;
+    Script::ActiveVmOnResourceStart(model);
+    CHECK(oldServer.WaitAccepted(3000));
+    Net::HttpDownloader::SetServerBase(base);
+    model.files[0].crc = asset.crc;
+    Script::ActiveVmOnResourceStart(model);
+    oldServer.Release();
+    CHECK(Net::HttpDownloader::WaitIdle(3000));
+    Script::ActiveVmPulseResources();
+    CHECK(Script::ResourceLoader::IsFileReady(model.name, asset.name, 0));
+    Script::ResourceLoader::ResourceView latest;
+    CHECK(Script::ResourceLoader::CopyResource(model.name, latest) && latest.state == "running");
+
+    // The host validates chunk boundaries before any native parser is called.
+    constexpr unsigned char clump[] = {
+        0x10, 0, 0, 0, 16, 0, 0, 0, 0xff, 0xff, 3, 0x18,
+        0x01, 0, 0, 0, 4, 0, 0, 0, 0xff, 0xff, 3, 0x18,
+        0, 0, 0, 0,
+    };
+    const auto fixture = path.parent_path() / "clump-fixture.dff";
+    std::ofstream(fixture, std::ios::binary).write(reinterpret_cast<const char*>(clump), sizeof(clump));
+    CHECK(Script::ReadDffClump(fixture.c_str()).size() == sizeof(clump));
+    std::filesystem::resize_file(fixture, sizeof(clump) - 1);
+    CHECK(Script::ReadDffClump(fixture.c_str()).empty());
+    std::filesystem::remove(fixture);
+    std::filesystem::remove(path);
+    std::filesystem::remove(restartPath);
+}
+
 uint16_t ClosedTcpPort() {
     const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return 0;
@@ -4481,6 +4570,7 @@ int main(int argc, char** argv) {
     CheckDxImage(vm);
     CheckGuiFonts(vm);
     CheckNetworkCalls(vm);
+    CheckModelDownloads(vm);
     CheckPedBodyState(vm);
 
     if (argc > 1) {

@@ -4,6 +4,7 @@
 
 #include "LuaVMStub.h"
 #include "Checksums.h"
+#include "ResourceLoader.h"
 #include "../net/RemoteCalls.h"
 
 #include "lua.hpp"
@@ -1480,12 +1481,9 @@ int l_downloadFile(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    const char* path = lua_tostring(L, 1);
-    if (!path || path[0] == '\0') {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    lua_pushboolean(L, 1);
+    size_t length = 0;
+    const char* path = lua_tolstring(L, 1, &length);
+    lua_pushboolean(L, ResourceLoader::RequestFile({path, length}, ActiveVmOwnerGeneration()));
     return 1;
 }
 

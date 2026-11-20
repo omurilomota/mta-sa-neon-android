@@ -1,11 +1,12 @@
 // Asset load, image, replace, shader, and texture queries.
 // CLuaEngineDefs.cpp:457-1393, 1499-1567, 2073-2126, 2274-2433, 3517-3548.
-// RenderWare owns the decoded DFF/TXD objects until the Lua handles are collected.
+// A DFF is owned by its resource element. TXDs use a Lua finalizer.
 // Applying them requires model-type-aware replacement and restoration through
 // the game streamer. Other unsupported load operations report failure to Lua.
 
 #include "EngineAssets.h"
 #include "EngineModelLoader.h"
+#include "LuaApiExtra.h"
 #include "LuaFileApi.h"
 
 #include "LuaVMStub.h"
@@ -25,6 +26,8 @@ extern "C" {
 #include <limits>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 
 namespace WorldRPG::Script {
 namespace {
@@ -38,28 +41,31 @@ constexpr std::uint32_t kClothesModelLast = 30151;
 constexpr std::uint32_t kClothesTexFirst = 30152;
 constexpr std::uint32_t kClothesTexLast = 30541;
 
-constexpr const char* kDffMetatable = "mta.engine.dff";
 constexpr const char* kTxdMetatable = "mta.engine.txd";
 
-void** AssetAt(lua_State* L, const char* metatable) {
+struct DffAsset {
+    void* clump;
+    uint32_t generation;
+};
+
+std::unordered_map<uint32_t, DffAsset> g_dffs;
+
+void** TxdAt(lua_State* L) {
     if (lua_type(L, 1) != LUA_TUSERDATA || lua_rawlen(L, 1) != sizeof(void*)) return nullptr;
-    return static_cast<void**>(luaL_testudata(L, 1, metatable));
+    return static_cast<void**>(luaL_testudata(L, 1, kTxdMetatable));
 }
 
-int CollectAsset(lua_State* L) {
-    const bool isDff = lua_toboolean(L, lua_upvalueindex(1));
-    if (void** asset = AssetAt(L, isDff ? kDffMetatable : kTxdMetatable)) {
-        if (isDff) NativeDestroyClump(*asset);
-        else NativeDestroyTXD(*asset);
+int CollectTxd(lua_State* L) {
+    if (void** asset = TxdAt(L)) {
+        NativeDestroyTXD(*asset);
         *asset = nullptr;
     }
     return 0;
 }
 
-void RegisterAsset(lua_State* L, const char* metatable, bool isDff) {
-    if (luaL_newmetatable(L, metatable)) {
-        lua_pushboolean(L, isDff);
-        lua_pushcclosure(L, CollectAsset, 1);
+void RegisterTxd(lua_State* L) {
+    if (luaL_newmetatable(L, kTxdMetatable)) {
+        lua_pushcfunction(L, CollectTxd);
         lua_setfield(L, -2, "__gc");
         lua_pushboolean(L, 0);
         lua_setfield(L, -2, "__metatable");
@@ -294,21 +300,35 @@ int LoadAsset(lua_State* L, const char* function, const char* kind, bool (*raw)(
 
 int LoadCOL(lua_State* L) { return LoadAsset(L, "engineLoadCOL", "COL", LooksCol); }
 
-int LoadRenderWareAsset(lua_State* L, const char* function, const char* metatable, void* (*load)(const char*)) {
+int LoadRenderWareAsset(lua_State* L, bool dff) {
+    const char* function = dff ? "engineLoadDFF" : "engineLoadTXD";
     std::string input;
     std::string error;
     if (!ReadScriptString(L, 1, function, input, error, false, "")) return FailFalse(L, error, true);
     if (ActiveVmOwnerNet() == 0) return FailFalse(L, "", false);
 
     std::filesystem::path path;
-    if (input.size() > 32767 || !ResolveFilePath(input, path))
+    if (input.size() > 32767 || !(dff ? ResolveModelPath(input, path) : ResolveFilePath(input, path)))
         return FailFalse(L, Usage(function, "Bad file path", input), true);
 
     const std::string filename = path.string();
+    if (dff) {
+        void* clump = NativeLoadDFF(filename.c_str());
+        if (!clump) return FailFalse(L, Usage(function, "Error reading RenderWare file", input), true);
+        const uint32_t id = CreateResourceElement("dff");
+        if (!id) {
+            NativeDestroyClump(clump);
+            return FailFalse(L, Usage(function, "Error creating DFF element", input), true);
+        }
+        g_dffs.emplace(id, DffAsset{clump, ActiveVmOwnerGeneration()});
+        PushElement(L, id);
+        return 1;
+    }
+
     auto** asset = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
     *asset = nullptr;
-    luaL_setmetatable(L, metatable);
-    *asset = load(filename.c_str());
+    luaL_setmetatable(L, kTxdMetatable);
+    *asset = NativeLoadTXD(filename.c_str());
     if (*asset) return 1;
 
     lua_pop(L, 1);
@@ -316,14 +336,14 @@ int LoadRenderWareAsset(lua_State* L, const char* function, const char* metatabl
 }
 
 int LoadDFF(lua_State* L) {
-    return LoadRenderWareAsset(L, "engineLoadDFF", kDffMetatable, NativeLoadDFF);
+    return LoadRenderWareAsset(L, true);
 }
 
 int LoadTXD(lua_State* L) {
     std::string error;
     bool filtering = true;
     if (!ReadOptionalBool(L, 2, "engineLoadTXD", true, filtering, error)) return FailFalse(L, error, true);
-    return LoadRenderWareAsset(L, "engineLoadTXD", kTxdMetatable, NativeLoadTXD);
+    return LoadRenderWareAsset(L, false);
 }
 
 int LoadIFP(lua_State* L) {
@@ -409,12 +429,12 @@ int RestoreCol(lua_State* L) {
 }
 
 int ImportTxd(lua_State* L) {
-    if (!AssetAt(L, kTxdMetatable)) return FailFalse(L, ScriptBad(L, "engineImportTXD", "txd", 1), true);
+    if (!TxdAt(L)) return FailFalse(L, ScriptBad(L, "engineImportTXD", "txd", 1), true);
     return FailFalse(L, Usage("engineImportTXD", "Unavailable", "Model texture replacement needs streamer support"), true);
 }
 
 int ReplaceModel(lua_State* L) {
-    if (!AssetAt(L, kDffMetatable)) return FailFalse(L, ScriptBad(L, "engineReplaceModel", "dff", 1), true);
+    if (!g_dffs.contains(ElementIdOf(L, 1))) return FailFalse(L, ScriptBad(L, "engineReplaceModel", "dff", 1), true);
     return FailFalse(L, Usage("engineReplaceModel", "Unavailable", "Model replacement needs streamer support"), true);
 }
 
@@ -707,9 +727,28 @@ int ModelTextures(lua_State* L) {
 
 }  // namespace
 
+void ReleaseDffElement(uint32_t id) {
+    const auto it = g_dffs.find(id);
+    if (it == g_dffs.end()) return;
+    NativeDestroyClump(it->second.clump);
+    g_dffs.erase(it);
+}
+
+void DropResourceDffs(uint32_t generation) {
+    std::vector<uint32_t> owned;
+    for (const auto& [id, asset] : g_dffs)
+        if (asset.generation == generation) owned.push_back(id);
+    for (uint32_t id : owned)
+        if (!DestroyClientElementForced(id)) ReleaseDffElement(id);
+}
+
+void ResetDffElements() {
+    for (const auto& [id, asset] : g_dffs) NativeDestroyClump(asset.clump);
+    g_dffs.clear();
+}
+
 void BindEngineAssetLua(lua_State* L) {
-    RegisterAsset(L, kDffMetatable, true);
-    RegisterAsset(L, kTxdMetatable, false);
+    RegisterTxd(L);
     const struct { const char* name; lua_CFunction fn; } binds[] = {
         {"engineLoadCOL", LoadCOL},
         {"engineLoadDFF", LoadDFF},

@@ -750,15 +750,15 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobjec
         }
     }
     // GTA's own load counter feeds the engine part of the bar until the session leaves the frontend.
-    WorldRPG::ConnectionLoading::SetEngine(WorldRPG::Game::ServerSessionLive() ? 1.0f
-                                                                              : WorldRPG::ConnectionLoading::ReadEngineLoad());
+    const bool gameReady = WorldRPG::Game::ServerSessionLive();
+    WorldRPG::ConnectionLoading::SetEngine(gameReady ? 1.0f : WorldRPG::ConnectionLoading::ReadEngineLoad());
     // Desktop CClientGame::PulseConnectionLoading (CClientGame.cpp:3657-3672). GTA is loaded once the
     // session left the frontend (desktop m_bGameLoaded).
-    WorldRPG::ConnectionLoading::Pulse(g_state->join->State() == WorldRPG::Net::JoinState::Complete,
-                                       WorldRPG::Game::ServerSessionLive(), transferring);
+    WorldRPG::ConnectionLoading::Pulse(g_state->join->State() == WorldRPG::Net::JoinState::Complete, gameReady, transferring);
     WorldRPG::ConnectionLoading::Flush();
-    // Client scripts of resources that became ready run here, on the VM thread.
-    WorldRPG::Script::ActiveVmPulseResources();
+    // Initial resource scripts may load models synchronously through the
+    // game's task queue. Run them once the game can service that queue.
+    if (gameReady) WorldRPG::Script::ActiveVmPulseResources();
     // CClientWeaponManager::DoPulse for createWeapon and touched server weapons.
     WorldRPG::Script::WeaponsPulse();
     if (!g_onDxFrameMethod || !g_gameActivityRef) return;
