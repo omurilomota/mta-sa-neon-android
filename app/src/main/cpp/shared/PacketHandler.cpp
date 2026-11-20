@@ -74,17 +74,15 @@ std::string ReadChatText(WorldRPG::Net::BitStreamReader& reader) {
 }
 
 bool HandleChatEcho(const uint8_t* body, size_t length, size_t bits) {
-    // Mobile peers receive R,G,B and one color bit, then the text. The server
-    // has already removed the 17-bit speaker id and the message type. A
-    // desktop-shaped packet (those 25 bits still present) is tried when the
-    // short header does not produce a readable line. That is how a sentence
-    // typed on the desktop client was being dropped.
+    // The standard header has 50 bits. The shortened mobile header has 25.
+    // When a caller has only whole bytes, retain its legacy layout fallback.
     WorldRPG::Net::BitStreamReader mobile(body, length, bits);
     uint8_t red = 0, green = 0, blue = 0, coded = 0;
     if (!mobile.Read(red) || !mobile.Read(green) || !mobile.Read(blue) || !mobile.ReadBits(&coded, 1))
         return false;
     std::string text = ReadChatText(mobile);
-    if (ReadableScore(text) < 2) {
+    const bool standardHeader = (bits % 8 == 2);
+    if (standardHeader || (bits % 8 == 0 && ReadableScore(text) < 2)) {
         WorldRPG::Net::BitStreamReader desktop(body, length, bits);
         uint8_t ignored = 0;
         uint32_t speaker = 0;
@@ -92,7 +90,7 @@ bool HandleChatEcho(const uint8_t* body, size_t length, size_t bits) {
             desktop.ReadBits(&coded, 1) && ReadElementId(desktop, speaker) &&
             desktop.Read(ignored)) {
             const std::string other = ReadChatText(desktop);
-            if (ReadableScore(other) > ReadableScore(text)) text = other;
+            if (standardHeader || ReadableScore(other) > ReadableScore(text)) text = other;
         }
     }
     if (text.empty()) return false;

@@ -224,8 +224,30 @@ bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
 }
 
 bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual,
-                    ElementKindResolver resolveKind) {
+                    ElementKindResolver resolveKind, bool currentWaterFlags) {
     switch (common.type) {
+        case kTypeWater: {
+            uint8_t count = 0;
+            if (!reader.Read(count) || (count != 3 && count != 4)) ENTITY_BODY_FAIL();
+            auto water = std::make_shared<WaterPolygon>();
+            water->vertices.resize(count);
+            for (auto& vertex : water->vertices) {
+                uint16_t x = 0, y = 0;
+                if (!reader.Read(x) || !reader.Read(y) || !reader.Read(vertex.z)) ENTITY_BODY_FAIL();
+                vertex.x = static_cast<int16_t>(x);
+                vertex.y = static_cast<int16_t>(y);
+            }
+            bool first = false;
+            if (!ReadFlag(reader, first)) ENTITY_BODY_FAIL();
+            if (currentWaterFlags) {
+                water->shallow = first;
+                if (!ReadFlag(reader, water->visible)) ENTITY_BODY_FAIL();
+            } else {
+                water->visible = !first;
+            }
+            visual.water = std::move(water);
+            return true;
+        }
         case kTypeDummy:
             return ReadEntityBodyDummy(reader, common, visual);
         case kTypePlayer:
@@ -251,7 +273,6 @@ bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Vi
         case kTypePed:
             return ReadEntityBodyPed(reader, common, visual);
         default:
-            // Types 16+ (SCRIPTFILE, WATER, WEAPON, BUILDING, ...) are not sent for this layout.
             DIAG("ENTITY_ADD unhandled type id=%u type=%u bit=%zu", common.id, static_cast<unsigned>(common.type), reader.GetReadOffsetBits());
             ENTITY_BODY_FAIL();
     }

@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Current Neon gameplay protocol
+
+- Server spawn packets schedule local player placement on the game thread, using the same path as server position updates.
+- Standard joins use `0x41E7`. The entity reader consumes three or four water vertices and both water flags, following Neon’s `CPacketHandler::Packet_EntityAdd` and `CEntityAddPacket::Write`. Truncated water packets fail decoding.
+- The launcher can answer a trusted issuer’s Android Keystore challenge during join. Chat text and HTTP resource downloads use the companion fixes from Neon PR #135.
+
 ### Added — Ko-fi Support Link & Badge (2026-11-19)
 
 - Documentation (`README.md`): Added official Ko-fi support badge and contribution link (`https://ko-fi.com/samuk190`) to the header and Community & Support section so contributors and community members can support ongoing development work.
