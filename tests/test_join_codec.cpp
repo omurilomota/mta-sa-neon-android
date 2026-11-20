@@ -23,6 +23,7 @@
 #include "../app/src/main/cpp/net/NeonJoinProtocol.cpp"
 #include "../app/src/main/cpp/net/NetJoinEnvelope.h"
 #undef private
+#include "../app/src/main/cpp/shared/entity/EntityAddTypes.h"
 
 #include <cstdio>
 #include <cstring>
@@ -139,10 +140,10 @@ static void TestU16LittleEndian() {
     BitStreamWriter w;
     w.Write(static_cast<uint16_t>(NEON_NETCODE_VERSION));
     CHECK(w.GetByteLength() == 2, "u16 is 2 bytes");
-    CHECK(w.GetData()[0] == 0xE6 && w.GetData()[1] == 0x41, "u16 LE on the wire (0x41E6 -> E6 41)");
+    CHECK(w.GetData()[0] == 0xE7 && w.GetData()[1] == 0x41, "u16 LE on the wire (0x41E7 -> E7 41)");
     RefReader r{w.GetData(), static_cast<uint32_t>(w.GetBitLength())};
     uint32_t v = 0;
-    CHECK(r.read(16, v) && v == 0x41E6, "reference reader decodes our u16");
+    CHECK(r.read(16, v) && v == 0x41E7, "reference reader decodes our u16");
 }
 
 static void TestSingleBit() {
@@ -433,7 +434,7 @@ static void TestJoinProfilesAndData() {
         uint32_t value = 0;
         CHECK(reader.read(8, value) && value == (legacy ? 19u : 4u), "logical packet id");
         if (legacy) CHECK(reader.skip(667*8), "skip legacy envelope");
-        CHECK(reader.read(16, value) && value == 0x41E6, "netcode");
+        CHECK(reader.read(16, value) && value == (profile == JoinProfile::Standard ? 0x41E7 : 0x41E6), "netcode");
         CHECK(reader.read(16, value) && value == 0x0170, "MTA version");
         CHECK(reader.read(16, value) && value == (legacy ? 0x3Du : 0x30u), "honest standard bitstream, captured legacy bitstream");
         CHECK(reader.read(16, value) && value == 15, "version string length");
@@ -485,7 +486,37 @@ static void TestIdentityRequests() {
     CHECK(join.State() == JoinState::Failed && join.Info().lastError.find("Sign in") != std::string::npos, "required auth never falls back to anonymous");
 }
 
+static void TestWaterEntityWire() {
+    using namespace WorldRPG::Entity;
+    EntityCommon common{};
+    common.type = kTypeWater;
+    for (uint8_t count : {3, 4}) {
+        for (unsigned flags = 0; flags < 4; ++flags) {
+            BitStreamWriter body;
+            body.Write(count);
+            for (int16_t i = 0; i < count; ++i) {
+                body.Write(static_cast<uint16_t>(-i));
+                body.Write(static_cast<uint16_t>(i));
+                body.Write(static_cast<float>(i) + 0.5f);
+            }
+            body.WriteBit((flags & 2) != 0);
+            body.WriteBit((flags & 1) != 0);
+            const size_t bits = 8 + 64 * count + 2;
+            BitStreamReader reader(body.GetData(), (bits + 7) / 8, bits);
+            Visual visual;
+            CHECK(ReadEntityBody(reader, common, visual), "current water body");
+            CHECK(visual.water && visual.water->vertices.size() == count &&
+                  visual.water->vertices[2].x == -2 && visual.water->vertices[2].z == 2.5f &&
+                  visual.water->visible == bool(flags & 1) && visual.water->shallow == bool(flags & 2) &&
+                  reader.GetRemainingBits() == 0, "water vertices, flags and cursor");
+            BitStreamReader truncated(body.GetData(), (bits + 7) / 8, bits - 1);
+            CHECK(!ReadEntityBody(truncated, common, visual), "missing visibility bit rejected");
+        }
+    }
+}
+
 int main() {
+    TestWaterEntityWire();
     TestNetworkJoinEnvelope();
     TestJoinProfilesAndData();
     TestIdentityRequests();

@@ -54,6 +54,7 @@ enum ElementType : uint8_t {
     kTypeTeam = 13,
     kTypePed = 14,
     kTypeColshape = 15,
+    kTypeWater = 17,
 };
 
 struct TeamSpawn {
@@ -62,7 +63,15 @@ struct TeamSpawn {
     std::vector<uint32_t> players;
 };
 
+struct WaterPolygon {
+    struct Vertex { int16_t x, y; float z; };
+    std::vector<Vertex> vertices;
+    bool shallow = false;
+    bool visible = true;
+};
+
 struct Visual {
+    std::shared_ptr<WaterPolygon> water;
     uint64_t generation = 0, shapeRevision = 0;
     std::shared_ptr<const Spatial::Geometry> colshape;
     int kind = 0; // 4 marker, 5 blip, 7 area, 14 ped, 1 player
@@ -223,7 +232,7 @@ bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out);
 // Resolver runs under the caller's element-table lock; -1 means unknown.
 using ElementKindResolver = int (*)(uint32_t id);
 bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual,
-                    ElementKindResolver resolveKind = nullptr);
+                    ElementKindResolver resolveKind = nullptr, bool currentWaterFlags = true);
 
 // Per-type bodies.
 bool ReadEntityBodyPed(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual);      // EntityAddPed.cpp (stub)

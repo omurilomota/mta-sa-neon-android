@@ -31,6 +31,7 @@ namespace {
 using namespace WorldRPG::Entity;
 
 std::mutex g_lock;
+bool g_currentWaterFlags = true;
 uint32_t g_local = 0;
 uint64_t g_generation = 0, g_localGeneration = 0;
 // CClientGame::SetAllDimensions: the local player's dimension (PLAYER_SPAWN, PLAYER_LIST, SET_ELEMENT_DIMENSION).
@@ -701,6 +702,11 @@ bool FindPlayerByNick(const std::string& nick, uint32_t& id) {
     return false;
 }
 
+void SetCurrentWaterFlags(bool enabled) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    g_currentWaterFlags = enabled;
+}
+
 void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
     Net::BitStreamReader reader(body, length, bits);
     uint32_t count = 0;
@@ -740,7 +746,7 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
             auto found = g_visuals.find(id);
             return found == g_visuals.end() ? -1 : found->second.kind;
         };
-        if (!ReadEntityBody(reader, common, visual, resolveKind)) {
+        if (!ReadEntityBody(reader, common, visual, resolveKind, g_currentWaterFlags)) {
             DIAG("ENTITY_ADD fail idx=%u/%u id=%u type=%u bit=%zu", index, static_cast<unsigned>(count), common.id, static_cast<unsigned>(common.type), reader.GetReadOffsetBits());
             break;
         }

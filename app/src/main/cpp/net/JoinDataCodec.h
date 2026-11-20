@@ -10,6 +10,8 @@
 
 namespace WorldRPG::Net {
 
+constexpr uint16_t NEON_NETCODE_VERSION = 0x41E7;
+
 enum class JoinProfile : uint8_t { Automatic = 0, Standard = 1, LegacyMobile = 2 };
 
 // Device captures 2026-11-08/16: these endpoints use the Oracle adapter,
@@ -37,7 +39,7 @@ inline bool BuildJoinData(JoinProfile profile, const std::string& nick, const st
         const std::array<uint8_t, 667> padding{};
         out.WriteBytes(padding.data(), padding.size());
     }
-    out.Write(static_cast<uint16_t>(0x41E6));
+    out.Write(legacy ? uint16_t{0x41E6} : NEON_NETCODE_VERSION);
     out.Write(static_cast<uint16_t>(0x0170));
     out.Write(static_cast<uint16_t>(legacy ? 0x003D : 0x0030));
     auto string = [&](std::string_view value) {

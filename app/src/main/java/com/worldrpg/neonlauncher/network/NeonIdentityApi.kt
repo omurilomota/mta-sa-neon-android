@@ -3,6 +3,7 @@ package com.worldrpg.neonlauncher.network
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import org.mtamobile.identity.AndroidTicketProof
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -37,7 +38,13 @@ class NeonIdentityApi(private val request: suspend (String, JSONObject, String?)
         if (serverId.isBlank() || serverId.length > 128 || address == null || address.key() != endpoint ||
             address.host.any { it !in '0'..'9' && it != '.' })
             throw IOException("The server returned invalid SA:O connection details.")
-        val response = request("/v1/tickets", JSONObject().put("server_id", serverId).put("server_endpoint", endpoint), session)
+        val payload = JSONObject().put("server_id", serverId).put("server_endpoint", endpoint)
+        var response = request("/v1/tickets", payload, session)
+        if (response.status == 428 && response.body.optString("error") == "android_proof_required") {
+            val challenge = field(response.body, "challenge", 43)
+            val proof = withContext(Dispatchers.IO) { AndroidTicketProof.create(challenge) }
+            response = request("/v1/tickets", payload.put("android_proof", proof), session)
+        }
         if (response.status == 401) throw SessionExpired()
         requireSuccess(response)
         return tokenField(response.body, "ticket", 4096)
@@ -77,9 +84,9 @@ class NeonIdentityApi(private val request: suspend (String, JSONObject, String?)
                 connection.setFixedLengthStreamingMode(bytes.size)
                 connection.outputStream.use { it.write(bytes) }
                 val status = connection.responseCode
-                if (status !in 200..299) return@withContext Response(status, JSONObject())
+                if (status !in 200..299 && status != 428) return@withContext Response(status, JSONObject())
                 if (connection.contentLengthLong > 131072) throw IOException("Invalid SA:O response size.")
-                val bytesRead = connection.inputStream.use { input ->
+                val bytesRead = (if (status == 428) connection.errorStream else connection.inputStream).use { input ->
                     val output = java.io.ByteArrayOutputStream()
                     val buffer = ByteArray(8192)
                     while (true) {
