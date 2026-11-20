@@ -10,6 +10,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json-jar", type=Path, required=True)
     parser.add_argument("--build-dir", type=Path, required=True)
+    parser.add_argument("--android-jar", type=Path, required=True,
+                        help="Android SDK android.jar to compile the production proof provider")
     parser.add_argument("--gradle-cache", type=Path, default=Path.home() / ".gradle/caches/modules-2/files-2.1")
     parser.add_argument("--java", default="java")
     args = parser.parse_args()
@@ -29,9 +31,11 @@ def main():
     classpath = os.pathsep.join(map(str, (stdlib, coroutines, annotations, args.json_jar, args.build_dir)))
     compiler_classpath = os.pathsep.join(map(str, (compiler, stdlib, reflect, runtime, trove, annotations)))
     network = root / "app/src/main/java/com/worldrpg/neonlauncher/network"
-    files = [network / "NeonIdentityApi.kt", network / "ServerAddress.kt", root / "tools/headless/kotlin/NeonIdentityRegressionTest.kt"]
+    proof = root / "app/src/main/java/org/mtamobile/identity/AndroidTicketProof.kt"
+    files = [network / "NeonIdentityApi.kt", network / "ServerAddress.kt", proof,
+             root / "tools/headless/kotlin/NeonIdentityRegressionTest.kt"]
     subprocess.run([args.java, "-cp", compiler_classpath, "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect",
-                    "-jvm-target", "17", "-classpath", classpath, "-d", str(args.build_dir), *map(str, files)], check=True)
+                    "-jvm-target", "17", "-classpath", classpath + os.pathsep + str(args.android_jar), "-d", str(args.build_dir), *map(str, files)], check=True)
     subprocess.run([args.java, "-cp", classpath, "com.worldrpg.neonlauncher.network.NeonIdentityRegressionTestKt"], check=True)
 
 

@@ -56,6 +56,23 @@ fun main() = runBlocking {
         rejected { wrongToken.poll(flow) }
         rejected { wrongToken.ticket(session, "server-id", "1.2.3.4:22003") }
     }
+    val challenge = "A".repeat(43)
+    var proofRequests = 0
+    val protected = NeonIdentityApi(createProof = {
+        check(it == challenge)
+        JSONObject().put("challenge", it)
+    }) { path, body, token ->
+        check(path == "/v1/tickets" && token == session)
+        check(body.getString("server_id") == "server-id" && body.getString("server_endpoint") == "1.2.3.4:22003")
+        if (++proofRequests == 1) {
+            check(!body.has("android_proof"))
+            NeonIdentityApi.Response(428, JSONObject().put("error", "android_proof_required").put("challenge", challenge))
+        } else {
+            check(body.getJSONObject("android_proof").getString("challenge") == challenge)
+            NeonIdentityApi.Response(200, JSONObject().put("ticket", "signed-ticket"))
+        }
+    }
+    check(protected.ticket(session, "server-id", "1.2.3.4:22003") == "signed-ticket" && proofRequests == 2)
     val invalid = NeonIdentityApi { _, _, _ -> error("invalid endpoint must not reach the service") }
     rejected { invalid.ticket(session, "server-id", "https://attacker.test") }
     for (endpoint in listOf("999.1.2.3:22003", "1.2.3.4:0", "1.2.3.4:65536", "01.2.3.4:22003", "1.2.3.4:02203"))
